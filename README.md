@@ -15,7 +15,7 @@ This README covers:
 
 # ConnQuery AI: Cisco FTD Connection Table Analyzer
 
-A Python tool designed to parse and analyze Cisco FTD (Firepower Threat Defense) connection table logs (`show conn` output). It stores the parsed data in a local SQLite database and provides various statistical reports. Additionally, it features an experimental Natural Language Query (NLQ) interface, powered by Google's Gemini API, allowing users to query their connection data using plain English.
+A Python tool designed to parse and analyze Cisco FTD (Firepower Threat Defense) connection table logs (`show conn`,'show conn long','show conn detail' output). It stores the parsed data in a local SQLite database and provides various statistical reports. Additionally, it features an experimental Natural Language Query (NLQ) interface, powered by Google's Gemini API, allowing users to query their connection data using plain English.
 
 ## Table of Contents
 
