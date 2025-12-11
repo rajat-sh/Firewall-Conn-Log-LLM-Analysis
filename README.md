@@ -1,4 +1,5 @@
 
+
 This README covers:
 *   Project overview
 *   Features
@@ -119,17 +120,17 @@ python ConnQuery_AI.py
 ### Initial Reports
 
 After successfully parsing the log file, the script will automatically generate and print a series of predefined analytical reports to the console. The detailed "Database Entries (Detailed View)" table is intentionally omitted from the initial reports for brevity, but other summary reports are displayed.
- Top 50 Connections by Bytes Transferred (Descending)
- Top 50 Connections by Idle Time (Descending)
- Top 50 Connections by Uptime (Descending)
- Top 50 Same-Interface Connections by Bytes Transferred (Descending)
- Top 50 Connections with Flag 'N' by Bytes Transferred (Descending)
- Top 50 Initiator IPs by Connection Count
- Top 50 Responder IPs by Connection Count
- Top 50 Initiator IPs (Flags containing 'N')
- Top 50 Responder IPs (Flags containing 'N')
- IP Address Counts (Descending)
- Port Counts (Descending, Top 50)
+ * Top 50 Connections by Bytes Transferred (Descending)
+ * Top 50 Connections by Idle Time (Descending)
+ * Top 50 Connections by Uptime (Descending)
+ * Top 50 Same-Interface Connections by Bytes Transferred (Descending)
+ * Top 50 Connections with Flag 'N' by Bytes Transferred (Descending)
+ * Top 50 Initiator IPs by Connection Count
+ * Top 50 Responder IPs by Connection Count
+ * Top 50 Initiator IPs (Flags containing 'N')
+ * Top 50 Responder IPs (Flags containing 'N')
+ * IP Address Counts (Descending)
+ * Port Counts (Descending, Top 50)
 
 ### Natural Language Query Interface
 
