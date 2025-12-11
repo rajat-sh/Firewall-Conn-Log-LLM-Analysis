@@ -166,7 +166,7 @@ Session ended. Goodbye!
 
 The script is designed to intelligently parse different variations of Cisco FTD `show conn` output. It attempts to detect the format based on specific patterns in the lines.
 
-**Format 3 (Most Detailed - with Translated IPs and Initiator/Responder):**
+**show conn long   (Most Detailed - with Translated IPs and Initiator/Responder):**
 Characterized by `(TranslatedIP/TranslatedPort)` and often includes an `Initiator:` and `Responder:` line.
 Example:
 ```
@@ -174,21 +174,21 @@ UDP outside: 4.2.2.2/200 (4.2.2.2/200) inside: 192.168.4.23/1321 (10.48.26.235/1
   Initiator: 192.168.4.23, Responder: 4.2.2.2
 ```
 
-**Format 1 (IP:Port notation):**
+**show conn (IP:Port notation):**
 Characterized by `IP:Port` notation for source/destination and `idle` time.
 Example:
 ```
 TCP internet  41.13.0.207:59737 INTERNAL-NETWORK  172.18.222.186:443, idle 0:52:09, bytes 132619, flags UfIO N1
 ```
 
-**Format 2 (IP/Port notation, without translated IPs, with Initiator/Responder):**
+**show conn detail (IP/Port notation, without translated IPs, with Initiator/Responder):**
 Characterized by `IP/Port` notation (without parentheses for translated IPs) and may include `Initiator:` and `Responder:` lines.
 Example:
 ```
 TCP outside:1.1.1.1/1234 inside:2.2.2.2/5678, flags U, idle 1m2s, uptime 1m2s, bytes 12345
   Initiator: 1.1.1.1, Responder: 2.2.2.2
 ```
-*(Note: The script's detection logic prioritizes Format 3, then Format 1, then Format 2. If your log contains a mix, it will use the format of the first detected connection entry.)*
+
 
 ## LLM Integration Details
 
