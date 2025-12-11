@@ -29,13 +29,16 @@ LLM_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/{LLM_MOD
 # You must set the GEMINI_API_KEY environment variable (e.g., by sourcing the .env file).
 GEMINI_API_KEY = os.environ.get('GEMINI_API_KEY')
 if not GEMINI_API_KEY:
-    print("\n[!] WARNING: GEMINI_API_KEY environment variable not found.")
-    print("    This is required for the Natural Language Query Interface (LLM).\n")
-    print("    >>> To fix this, set the environment variable in your terminal:")
-    print("    >>> macOS/Linux: export GEMINI_API_KEY='YOUR_API_KEY_HERE'")
-    print("    >>> Windows (CMD): set GEMINI_API_KEY=YOUR_API_KEY_HERE")
-    print("    >>> Windows (PowerShell): $env:GEMINI_API_KEY='YOUR_API_KEY_HERE'")
-    print("    (Replace 'YOUR_API_KEY_HERE' with your actual key.)\n")
+    print("""
+[!] WARNING: GEMINI_API_KEY environment variable not found.
+    This is required for the Natural Language Query Interface (LLM).
+
+    >>> To fix this, set the environment variable in your terminal:
+    >>> macOS/Linux: export GEMINI_API_KEY='YOUR_API_KEY_HERE'
+    >>> Windows (CMD): set GEMINI_API_KEY=YOUR_API_KEY_HERE
+    >>> Windows (PowerShell): $env:GEMINI_API_KEY='YOUR_API_KEY_HERE'
+    (Replace 'YOUR_API_KEY_HERE' with your actual key.)
+""")
 
 
 # --- DATABASE UTILITIES & LOGIC ---
@@ -177,16 +180,16 @@ def _parse_format2_record(full_record: str) -> Optional[Tuple[Any, ...]]:
     Parses a single or multi-line record in Format 2.
     Returns a 17-element tuple. Xlated IPs are None.
     """
-    # 1. Main Connection Info Regex 
+    # 1. Main Connection Info Regex - Made more specific to avoid matching header lines
     main_match = re.search(
-        r'(\w+)\s+([^:\s]+):\s*([^/\s]+/[\d\.]+[^:\s]*)\s+([^:\s]+):\s*([^/\s]+/[\d\.]+[^:\s]*)', 
-        full_record
+        r'^(UDP|TCP|ICMP|IP)\s+([^:\s]+):\s*([^/\s]+/[\d\.]+[^:\s]*)\s+([^:\s]+):\s*([^/\s]+/[\d\.]+[^:\s]*)', 
+        full_record # Added ^ to anchor to start, and specific protocols
     )
     
     if not main_match:
-         # Fallback for non-port protocols like ICMP
+         # Fallback for non-port protocols like ICMP that might not have /port, but still need protocol and interfaces
         main_match = re.search(
-            r'(\w+)\s+([^:\s]+):\s*([^:\s,]+)\s+([^:\s]+):\s*([^:\s,]+)', 
+            r'^(UDP|TCP|ICMP|IP)\s+([^:\s]+):\s*([^:\s,]+)\s+([^:\s]+):\s*([^:\s,]+)', 
             full_record
         )
         if not main_match:
@@ -234,41 +237,27 @@ def _parse_format2_record(full_record: str) -> Optional[Tuple[Any, ...]]:
         bytes_val, flags, initiator_ip, responder_ip
     )
 
-def _parse_format3_line(line: str) -> Optional[Tuple[Any, ...]]:
+def _parse_format3_line(full_record: str) -> Optional[Tuple[Any, ...]]:
     """
-    Parses a single line in Format 3 (IP/Port (XlatedIP/XlatedPort)).
-    Returns a 17-element tuple. Init/Resp IPs are None.
+    Parses a single or multi-line record in Format 3 (IP/Port (XlatedIP/XlatedPort)).
+    This version is more robust to variations in metric order and includes initiator/responder.
+    Returns a 17-element tuple.
     """
-    # Regex updated to capture all components including uptime
-    regex = re.compile(
-        r'(\w+)\s+([^:\s]+):\s*([^/\s]+/[\d\.]+)\s*\(([^/\s]+/[\d\.]+)\)\s*' # Side 1 (Real & Xlated)
-        r'([^:\s]+):\s*([^/\s]+/[\d\.]+)\s*\(([^/\s]+/[\d\.]+)\),\s*'      # Side 2 (Real & Xlated)
-        r'.*flags\s+([^\s,]+)\s*,\s*idle\s+([^\s,]+)\s*,\s*uptime\s+([^\s,]+)\s*.*bytes\s+(\d+)'    # Metrics
+    # Main connection info regex (Side 1 & Side 2) - Anchored to start
+    main_regex = re.compile(
+        r'^(UDP|TCP|ICMP|IP)\s+([^:\s]+):\s*([^/\s]+/[\d\.]+)\s*\(([^/\s]+/[\d\.]+)\)\s*' # Side 1 (Real & Xlated)
+        r'([^:\s]+):\s*([^/\s]+/[\d\.]+)\s*\(([^/\s]+/[\d\.]+)\)'          # Side 2 (Real & Xlated)
     )
     
-    match = regex.search(line)
+    main_match = main_regex.search(full_record)
     
-    if not match:
-        # Try finding the simpler format 3 if the full uptime/timeout is missing from the metrics line
-        regex_simple_metrics = re.compile(
-            r'(\w+)\s+([^:\s]+):\s*([^/\s]+/[\d\.]+)\s*\(([^/\s]+/[\d\.]+)\)\s*' # Side 1 (Real & Xlated)
-            r'([^:\s]+):\s*([^/\s]+/[\d\.]+)\s*\(([^/\s]+/[\d\.]+)\),\s*'      # Side 2 (Real & Xlated)
-            r'.*flags\s+([^\s,]+)\s*,\s*idle\s+([^\s,]+)\s*.*bytes\s+(\d+)'    # Simplified Metrics (missing uptime)
-        )
-        match = regex_simple_metrics.search(line)
-        if not match:
-            # print(f"[!] Format 3 Parsing Error: Could not match components in: {line.strip()}")
-            return None
-        
-        # If simplified match, groups are: 1-7 (connection info), 8:flags, 9:idle_time, 10:bytes_val_str
-        protocol, int1, ip1_raw, xip1_raw, int2, ip2_raw, xip2_raw, flags, idle_time, bytes_val_str = match.groups()
-        uptime = None # Uptime is missing in this simpler format
-    else:
-        # Full match, groups are: 1-7 (connection info), 8:flags, 9:idle_time, 10:uptime, 11:bytes_val_str
-        protocol, int1, ip1_raw, xip1_raw, int2, ip2_raw, xip2_raw, flags, idle_time, uptime, bytes_val_str = match.groups()
+    if not main_match:
+        # print(f"[!] Format 3 Main Info Error: Could not match main connection components in: {full_record.strip()}")
+        return None
 
-        
     try:
+        protocol, int1, ip1_raw, xip1_raw, int2, ip2_raw, xip2_raw = main_match.groups()
+        
         # Parse Real IPs/Ports
         ip_addr1, port1 = _parse_ip_port_slash(ip1_raw)
         ip_addr2, port2 = _parse_ip_port_slash(ip2_raw)
@@ -277,17 +266,36 @@ def _parse_format3_line(line: str) -> Optional[Tuple[Any, ...]]:
         xlated_ip1, xlated_port1 = _parse_ip_port_slash(xip1_raw)
         xlated_ip2, xlated_port2 = _parse_ip_port_slash(xip2_raw)
         
+        # Extract metrics and initiator/responder separately from the full record string
+        flags_match = re.search(r'flags\s+([^\s,]+)', full_record)
+        flags = flags_match.group(1).strip() if flags_match else ""
+
+        idle_match = re.search(r'idle\s+([^\s,]+)', full_record)
+        idle_time = idle_match.group(1).strip() if idle_match else ""
+        
+        uptime_match = re.search(r'uptime\s+([^\s,]+)', full_record)
+        uptime = uptime_match.group(1).strip() if uptime_match else None
+        
+        bytes_match = re.search(r'bytes\s+(\d+)', full_record)
+        bytes_val = int(bytes_match.group(1)) if bytes_match else 0
+
+        init_resp_match = re.search(
+            r'Initiator:\s*([^,\s]+),\s*Responder:\s*([^,\s]+)', 
+            full_record
+        )
+        initiator_ip = init_resp_match.group(1) if init_resp_match else None
+        responder_ip = init_resp_match.group(2) if init_resp_match else None
+
         data = (
             protocol, int1, ip_addr1, port1, xlated_ip1, xlated_port1,
             int2, ip_addr2, port2, xlated_ip2, xlated_port2,
-            idle_time.strip(), uptime.strip() if uptime else None, # Uptime field included
-            int(bytes_val_str), flags.strip(),
-            None, # initiator_ip (Not present in F3)
-            None  # responder_ip (Not present in F3)
+            idle_time, uptime, 
+            bytes_val, flags,
+            initiator_ip, responder_ip
         )
         return data
     except Exception as e:
-        print(f"[!] Format 3 Internal Parsing Error on line: {line.strip()}. Error: {e}")
+        print(f"[!] Format 3 Internal Parsing Error on record: {full_record.strip()}. Error: {e}")
         return None
 
 def process_file(conn: sqlite3.Connection):
@@ -307,40 +315,50 @@ def process_file(conn: sqlite3.Connection):
     format_type = None
     
     try:
-        # Use a list of lines for multi-line format 2 handling
-        try:
-            with open(INPUT_FILENAME, 'r') as f:
-                lines = f.readlines()
-        except FileNotFoundError:
-            print(f"[!] Error: File {INPUT_FILENAME} not found. Please ensure the log file exists and contains data.")
-            return
-
+        with open(INPUT_FILENAME, 'r') as f:
+            lines = f.readlines()
+        
         # --- 1. Format Detection ---
-        for line in lines:
+        # Find the first line that looks like a connection record
+        start_processing_index = 0
+        for idx, line in enumerate(lines):
             stripped_line = line.strip()
             if not stripped_line:
                 continue
             
-            # Format 3 Check: Has translated IP/Port in parentheses
-            if '(' in stripped_line and ')' in stripped_line and '/' in stripped_line:
-                format_type = 3
-            # Format 2 Check: Has Initiator/Responder or uses xlate id/slash notation without parentheses
-            elif 'Initiator:' in stripped_line or 'xlate id' in stripped_line or (('/' in stripped_line) and (':' not in stripped_line)):
-                format_type = 2
-            # Format 1 Check: Uses colon notation (IP:Port) and has 'idle' time
-            elif ':' in stripped_line and 'idle' in stripped_line:
-                 format_type = 1
+            # --- DEBUG: Print current line being evaluated for format detection ---
+            # print(f"DEBUG: Attempting format detection for line {idx}: '{stripped_line}'")
+            # --------------------------------------------------------------------
 
-            if format_type:
+            # Prioritize most specific formats first
+            # Format 3 Check: Has translated IP/Port in parentheses and starts with protocol
+            if re.search(r'^(UDP|TCP|ICMP|IP)\s+\w+:\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+\s+\(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+\)', stripped_line):
+                format_type = 3
+                start_processing_index = idx
+                # print(f"DEBUG: Line {idx} identified as Format 3.")
+                break
+            # Format 1 Check: Second most specific - colon-separated IP:Port and 'idle'
+            # Ensure it doesn't accidentally catch a Format 3 line that also has 'idle'.
+            elif re.search(r'^(UDP|TCP|ICMP|IP)\s+\w+\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+\s+\w+\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+,\s*idle\s+([^\s,]+)', stripped_line):
+                format_type = 1
+                start_processing_index = idx
+                # print(f"DEBUG: Line {idx} identified as Format 1.")
+                break
+            # Format 2 Check: Has IP/Port using slash notation and starts with protocol, but no translated IP/Port in parentheses
+            elif re.search(r'^(UDP|TCP|ICMP|IP)\s+\w+:\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+', stripped_line):
+                format_type = 2
+                start_processing_index = idx
+                # print(f"DEBUG: Line {idx} identified as Format 2.")
                 break
 
         if format_type is None:
-            print("[!] Error: Could not determine log format from the file content.")
+            print("[!] Error: Could not determine log format from the file content after scanning all lines. No valid connection record found.")
             return
 
         print(f"[*] Detected format: Format {format_type}")
         
-        i = 0
+        # Start processing from the detected index
+        i = start_processing_index
         while i < len(lines):
             line = lines[i].strip()
             i += 1
@@ -351,8 +369,16 @@ def process_file(conn: sqlite3.Connection):
             record_data = None
             full_record = line
             
+            # --- DEBUG: Print current line being processed ---
+            # print(f"\nDEBUG: Processing record starting at line {i-1} (original index) for Format {format_type}: '{line.strip()}'")
+            # -------------------------------------------------
+
             if format_type == 3:
-                # Format 3 is typically a single line
+                # Format 3 can span multiple lines if it includes Initiator/Responder info
+                # Check for the optional Initiator/Responder line (indented)
+                if i < len(lines) and lines[i].strip().startswith('Initiator:'):
+                    full_record += " " + lines[i].strip()
+                    i += 1 # Consume the Initiator line
                 record_data = _parse_format3_line(full_record)
                 
             elif format_type == 2:
@@ -374,7 +400,13 @@ def process_file(conn: sqlite3.Connection):
                 # Format 1 is a single line
                 record_data = _parse_format1_line(full_record)
             
-            
+            # --- DEBUG: Print parsing result ---
+            # if record_data:
+            #     print(f"  DEBUG: Parsed record_data (first 5 elements): {record_data[:5]}...")
+            # else:
+            #     print(f"  DEBUG: Parsing returned None for record: '{full_record.strip()}'")
+            # -----------------------------------
+
             # record_data must be a tuple of 17 elements
             if record_data and len(record_data) == 17:
                 data_batch.append(record_data)
@@ -384,7 +416,6 @@ def process_file(conn: sqlite3.Connection):
             
             # Bulk insert when the batch is full
             if len(data_batch) >= BATCH_SIZE:
-                # NOTE: This INSERT statement must now contain 17 placeholders
                 cursor.executemany('''
                     INSERT INTO connections (
                         protocol, interface1, ip_addr1, port1, xlated_ip1, xlated_port1, 
@@ -393,12 +424,10 @@ def process_file(conn: sqlite3.Connection):
                     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', data_batch)
                 conn.commit()
-                # print(f"[*] Committed batch of {len(data_batch)} records. Total processed: {total_processed}")
                 data_batch = [] 
 
         # Insert any remaining records
         if data_batch:
-            # NOTE: This INSERT statement must now contain 17 placeholders
             cursor.executemany('''
                 INSERT INTO connections (
                     protocol, interface1, ip_addr1, port1, xlated_ip1, xlated_port1, 
@@ -408,15 +437,15 @@ def process_file(conn: sqlite3.Connection):
             ''', data_batch)
             conn.commit()
             total_processed += len(data_batch)
-            # print(f"[*] Committed final batch of {len(data_batch)} records. Total processed: {total_processed}")
         
         print(f"[*] Successfully processed {total_processed} entries from {INPUT_FILENAME} into database.")
         
+    except FileNotFoundError:
+        print(f"[!] Error: File {INPUT_FILENAME} not found. Please ensure the log file exists and contains data.")
     except Exception as e:
-        print(f"[!] Error during file processing: {e}")
+        print(f"[!] An unexpected error occurred during file processing: {e}")
 
-# --- REPORTING FUNCTIONS (UNCHANGED) ---
-# NOTE: These functions are included for completeness and correct execution flow.
+# --- REPORTING FUNCTIONS (CORRECTED to include port numbers and interfaces) ---
 
 def print_database(conn):
     """Queries and prints all rows from the database."""
@@ -425,35 +454,47 @@ def print_database(conn):
     cursor.execute("SELECT * FROM connections")
     rows = cursor.fetchall()
     
+    # Updated header to include ports and adjust widths
     header = (
-        f"{'ID':<4} {'PROTO':<6} {'IP_ADDR1':<16} {'X-IP1':<16} {'IP_ADDR2':<16} {'X-IP2':<16} "
+        f"{'ID':<4} {'PROTO':<6} {'IFACE1':<10} {'IP1:PORT1':<22} {'X-IP1:X-PORT1':<22} {'IFACE2':<10} {'IP2:PORT2':<22} {'X-IP2:X-PORT2':<22} "
         f"{'BYTES':<8} {'IDLE':<10} {'UPTIME':<10} {'FLAGS':<6} {'INIT_IP':<16} {'RESP_IP':<16}"
     )
     print(header)
-    print("-" * 160)
+    print("-" * len(header))
 
     for row in rows:
-        r_id, proto, _, ip1, _, xip1, _, _, ip2, _, xip2, _, idle, uptime_val, bytes_t, flags, init_ip, resp_ip = row
+        # Correct unpacking for all 18 columns
+        r_id, proto, int1, ip1, port1, xip1, xport1, int2, ip2, port2, xip2, xport2, idle, uptime_val, bytes_t, flags, init_ip, resp_ip = row
         
-        xip1_display = xip1 if xip1 else "-"
-        xip2_display = xip2 if xip2 else "-"
+        # Format IP:Port strings, handling None/0 for xlated and port
+        ip1_port_display = f"{ip1}:{port1}" if port1 is not None and port1 != 0 else (ip1 if ip1 else "-")
+        ip2_port_display = f"{ip2}:{port2}" if port2 is not None and port2 != 0 else (ip2 if ip2 else "-")
+
+        # Display '-' if xlated IP/Port is None, otherwise format as IP:Port
+        xip1_port_display = f"{xip1}:{xport1}" if xip1 is not None and xport1 is not None and xport1 != 0 else (xip1 if xip1 else "-")
+        xip2_port_display = f"{xip2}:{xport2}" if xip2 is not None and xport2 is not None and xport2 != 0 else (xip2 if xip2 else "-")
+        
         init_ip_display = init_ip if init_ip else "-"
         resp_ip_display = resp_ip if resp_ip else "-"
         
         print(
-            f"{r_id:<4} {proto:<6} {ip1:<16} {xip1_display:<16} {ip2:<16} {xip2_display:<16} "
+            f"{r_id:<4} {proto:<6} {int1:<10} {ip1_port_display:<22} {xip1_port_display:<22} {int2:<10} {ip2_port_display:<22} {xip2_port_display:<22} "
             f"{bytes_t:<8} {idle:<10} {uptime_val if uptime_val else '-':<10} {flags:<6} {init_ip_display:<16} {resp_ip_display:<16}"
         )
-    print("------------------------------------------------------------------------------------------------------------------------------------------------------------------\n")
+    print("-" * len(header))
+    print("\n")
 
 def print_top_bytes_entries(conn, limit=50):
     """Queries and prints the top 50 connection entries sorted by bytes_transferred in descending order."""
     print(f"\n--- Top {limit} Connections by Bytes Transferred (Descending) ---")
     cursor = conn.cursor()
 
+    # Corrected SELECT statement to include interface and port columns
     cursor.execute(f'''
         SELECT 
-            id, protocol, ip_addr1, xlated_ip1, ip_addr2, xlated_ip2, bytes_transferred, idle_time, uptime, flags, initiator_ip, responder_ip
+            id, protocol, interface1, ip_addr1, port1, xlated_ip1, xlated_port1, 
+            interface2, ip_addr2, port2, xlated_ip2, xlated_port2, 
+            bytes_transferred, idle_time, uptime, flags, initiator_ip, responder_ip
         FROM 
             connections
         ORDER BY 
@@ -462,27 +503,33 @@ def print_top_bytes_entries(conn, limit=50):
     ''', (limit,))
     rows = cursor.fetchall()
 
+    # Updated header to include ports and adjust widths
     header = (
-        f"{'ID':<4} {'PROTO':<6} {'BYTES':<8} {'IP_ADDR1':<16} {'X-IP1':<16} {'IP_ADDR2':<16} {'X-IP2':<16} "
+        f"{'ID':<4} {'PROTO':<6} {'BYTES':<8} {'IFACE1':<10} {'IP1:PORT1':<22} {'X-IP1:X-PORT1':<22} {'IFACE2':<10} {'IP2:PORT2':<22} {'X-IP2:X-PORT2':<22} "
         f"{'IDLE':<10} {'UPTIME':<10} {'FLAGS'}"
     )
     print(header)
-    print("-" * 135)
+    print("-" * len(header))
 
     if not rows:
         print("No entries found in the database.")
         return
 
     for row in rows:
-        r_id, proto, ip1, xip1, ip2, xip2, bytes_t, idle, uptime_val, flags, init_ip, resp_ip = row
-        xip1_display = xip1 if xip1 else "-"
-        xip2_display = xip2 if xip2 else "-"
+        # Correct unpacking for the selected columns
+        r_id, proto, int1, ip1, port1, xip1, xport1, int2, ip2, port2, xip2, xport2, bytes_t, idle, uptime_val, flags, init_ip, resp_ip = row
+        
+        ip1_port_display = f"{ip1}:{port1}" if port1 is not None and port1 != 0 else (ip1 if ip1 else "-")
+        ip2_port_display = f"{ip2}:{port2}" if port2 is not None and port2 != 0 else (ip2 if ip2 else "-")
+        xip1_port_display = f"{xip1}:{xport1}" if xip1 is not None and xport1 is not None and xport1 != 0 else (xip1 if xip1 else "-")
+        xip2_port_display = f"{xip2}:{xport2}" if xip2 is not None and xport2 is not None and xport2 != 0 else (xip2 if xip2 else "-")
 
         print(
-            f"{r_id:<4} {proto:<6} {bytes_t:<8} {ip1:<16} {xip1_display:<16} {ip2:<16} {xip2_display:<16} "
+            f"{r_id:<4} {proto:<6} {bytes_t:<8} {int1:<10} {ip1_port_display:<22} {xip1_port_display:<22} {int2:<10} {ip2_port_display:<22} {xip2_port_display:<22} "
             f"{idle:<10} {uptime_val if uptime_val else '-':<10} {flags}"
         )
-    print("-------------------------------------------------------------------------------------------------------------------------------------\n")
+    print("-" * len(header))
+    print("\n")
 
 def print_top_idle_time_entries(conn, limit=50):
     """
@@ -492,44 +539,53 @@ def print_top_idle_time_entries(conn, limit=50):
     print(f"\n--- Top {limit} Connections by Idle Time (Descending) ---")
     cursor = conn.cursor()
     
+    # Corrected SELECT statement to include interface and port columns
     cursor.execute('''
         SELECT 
-            id, protocol, ip_addr1, xlated_ip1, ip_addr2, xlated_ip2, idle_time, uptime, bytes_transferred, flags
+            id, protocol, interface1, ip_addr1, port1, xlated_ip1, xlated_port1, 
+            interface2, ip_addr2, port2, xlated_ip2, xlated_port2, 
+            idle_time, uptime, bytes_transferred, flags
         FROM 
             connections
     ''')
     rows = cursor.fetchall()
 
-    # Sort key is idle_time (index 6)
+    # Sort key is idle_time (index 12 in the new row structure)
     sorted_rows = sorted(
         rows, 
-        key=lambda r: _time_to_seconds(r[6] or "0s"),
+        key=lambda r: _time_to_seconds(r[12] or "0s"), # idle_time is now at index 12
         reverse=True
     )
     
     rows_to_display = sorted_rows[:limit]
 
+    # Updated header to include ports and adjust widths
     header = (
-        f"{'ID':<4} {'PROTO':<6} {'IDLE':<10} {'UPTIME':<10} {'IP_ADDR1':<16} {'X-IP1':<16} {'IP_ADDR2':<16} {'X-IP2':<16} "
+        f"{'ID':<4} {'PROTO':<6} {'IDLE':<10} {'UPTIME':<10} {'IFACE1':<10} {'IP1:PORT1':<22} {'X-IP1:X-PORT1':<22} {'IFACE2':<10} {'IP2:PORT2':<22} {'X-IP2:X-PORT2':<22} "
         f"{'BYTES':<8} {'FLAGS'}"
     )
     print(header)
-    print("-" * 135)
+    print("-" * len(header))
 
     if not rows_to_display:
         print("No entries found in the database.")
         return
 
     for row in rows_to_display:
-        r_id, proto, ip1, xip1, ip2, xip2, idle, uptime_val, bytes_t, flags = row
-        xip1_display = xip1 if xip1 else "-"
-        xip2_display = xip2 if xip2 else "-"
+        # Correct unpacking for the selected columns
+        r_id, proto, int1, ip1, port1, xip1, xport1, int2, ip2, port2, xip2, xport2, idle, uptime_val, bytes_t, flags = row
+        
+        ip1_port_display = f"{ip1}:{port1}" if port1 is not None and port1 != 0 else (ip1 if ip1 else "-")
+        ip2_port_display = f"{ip2}:{port2}" if port2 is not None and port2 != 0 else (ip2 if ip2 else "-")
+        xip1_port_display = f"{xip1}:{xport1}" if xip1 is not None and xport1 is not None and xport1 != 0 else (xip1 if xip1 else "-")
+        xip2_port_display = f"{xip2}:{xport2}" if xip2 is not None and xport2 is not None and xport2 != 0 else (xip2 if xip2 else "-")
 
         print(
-            f"{r_id:<4} {proto:<6} {idle:<10} {uptime_val if uptime_val else '-':<10} {ip1:<16} {xip1_display:<16} {ip2:<16} {xip2_display:<16} "
+            f"{r_id:<4} {proto:<6} {idle:<10} {uptime_val if uptime_val else '-':<10} {int1:<10} {ip1_port_display:<22} {xip1_port_display:<22} {int2:<10} {ip2_port_display:<22} {xip2_port_display:<22} "
             f"{bytes_t:<8} {flags}"
         )
-    print("-------------------------------------------------------------------------------------------------------------------------------------\n")
+    print("-" * len(header))
+    print("\n")
 
 
 def print_top_uptime_entries(conn, limit=50):
@@ -540,44 +596,53 @@ def print_top_uptime_entries(conn, limit=50):
     print(f"\n--- Top {limit} Connections by Uptime (Descending) ---")
     cursor = conn.cursor()
     
+    # Corrected SELECT statement to include interface and port columns
     cursor.execute('''
         SELECT 
-            id, protocol, ip_addr1, xlated_ip1, ip_addr2, xlated_ip2, idle_time, uptime, bytes_transferred, flags
+            id, protocol, interface1, ip_addr1, port1, xlated_ip1, xlated_port1, 
+            interface2, ip_addr2, port2, xlated_ip2, xlated_port2, 
+            idle_time, uptime, bytes_transferred, flags
         FROM 
             connections
     ''')
     rows = cursor.fetchall()
 
-    # Sort key is uptime (index 7)
+    # Sort key is uptime (index 13 in the new row structure)
     sorted_rows = sorted(
         rows, 
-        key=lambda r: _time_to_seconds(r[7] or "0s"), # Handle potential None/empty uptime safely
+        key=lambda r: _time_to_seconds(r[13] or "0s"), # Uptime is now at index 13
         reverse=True
     )
     
     rows_to_display = sorted_rows[:limit]
 
+    # Updated header to include ports and adjust widths
     header = (
-        f"{'ID':<4} {'PROTO':<6} {'UPTIME':<10} {'IDLE':<10} {'IP_ADDR1':<16} {'X-IP1':<16} {'IP_ADDR2':<16} {'X-IP2':<16} "
+        f"{'ID':<4} {'PROTO':<6} {'UPTIME':<10} {'IDLE':<10} {'IFACE1':<10} {'IP1:PORT1':<22} {'X-IP1:X-PORT1':<22} {'IFACE2':<10} {'IP2:PORT2':<22} {'X-IP2:X-PORT2':<22} "
         f"{'BYTES':<8} {'FLAGS'}"
     )
     print(header)
-    print("-" * 135)
+    print("-" * len(header))
 
     if not rows_to_display:
         print("No entries found in the database.")
         return
 
     for row in rows_to_display:
-        r_id, proto, ip1, xip1, ip2, xip2, idle, uptime_val, bytes_t, flags = row
-        xip1_display = xip1 if xip1 else "-"
-        xip2_display = xip2 if xip2 else "-"
+        # Correct unpacking for the selected columns
+        r_id, proto, int1, ip1, port1, xip1, xport1, int2, ip2, port2, xip2, xport2, idle, uptime_val, bytes_t, flags = row
+        
+        ip1_port_display = f"{ip1}:{port1}" if port1 is not None and port1 != 0 else (ip1 if ip1 else "-")
+        ip2_port_display = f"{ip2}:{port2}" if port2 is not None and port2 != 0 else (ip2 if ip2 else "-")
+        xip1_port_display = f"{xip1}:{xport1}" if xip1 is not None and xport1 is not None and xport1 != 0 else (xip1 if xip1 else "-")
+        xip2_port_display = f"{xip2}:{xport2}" if xip2 is not None and xport2 is not None and xport2 != 0 else (xip2 if xip2 else "-")
 
         print(
-            f"{r_id:<4} {proto:<6} {uptime_val if uptime_val else '-':<10} {idle:<10} {ip1:<16} {xip1_display:<16} {ip2:<16} {xip2_display:<16} "
+            f"{r_id:<4} {proto:<6} {uptime_val if uptime_val else '-':<10} {idle:<10} {int1:<10} {ip1_port_display:<22} {xip1_port_display:<22} {int2:<10} {ip2_port_display:<22} {xip2_port_display:<22} "
             f"{bytes_t:<8} {flags}"
         )
-    print("-------------------------------------------------------------------------------------------------------------------------------------\n")
+    print("-" * len(header))
+    print("\n")
 
 
 def print_same_interface_entries(conn, limit=50):
@@ -586,9 +651,12 @@ def print_same_interface_entries(conn, limit=50):
     print(f"\n--- Top {limit} Same-Interface Connections by Bytes Transferred (Descending) ---")
     cursor = conn.cursor()
 
+    # Corrected SELECT statement to include port columns
     cursor.execute(f'''
         SELECT 
-            id, protocol, interface1, ip_addr1, xlated_ip1, ip_addr2, xlated_ip2, bytes_transferred, idle_time, uptime, flags
+            id, protocol, interface1, ip_addr1, port1, xlated_ip1, xlated_port1, 
+            ip_addr2, port2, xlated_ip2, xlated_port2, 
+            bytes_transferred, idle_time, uptime, flags
         FROM 
             connections
         WHERE
@@ -599,27 +667,33 @@ def print_same_interface_entries(conn, limit=50):
     ''', (limit,))
     rows = cursor.fetchall()
 
+    # Updated header to include ports and adjust widths
     header = (
-        f"{'ID':<4} {'PROTO':<6} {'IFACE':<10} {'BYTES':<8} {'IP_ADDR1':<16} {'X-IP1':<16} {'IP_ADDR2':<16} {'X-IP2':<16} "
+        f"{'ID':<4} {'PROTO':<6} {'IFACE':<10} {'BYTES':<8} {'IP1:PORT1':<22} {'X-IP1:X-PORT1':<22} {'IP2:PORT2':<22} {'X-IP2:X-PORT2':<22} "
         f"{'IDLE':<10} {'UPTIME':<10} {'FLAGS'}"
     )
     print(header)
-    print("-" * 145)
+    print("-" * len(header))
 
     if not rows:
         print("No connections found where interface1 and interface2 are the same.")
         return
 
     for row in rows:
-        r_id, proto, interface, ip1, xip1, ip2, xip2, bytes_t, idle, uptime_val, flags = row
-        xip1_display = xip1 if xip1 else "-"
-        xip2_display = xip2 if xip2 else "-"
+        # Correct unpacking for the selected columns
+        r_id, proto, interface, ip1, port1, xip1, xport1, ip2, port2, xip2, xport2, bytes_t, idle, uptime_val, flags = row
+        
+        ip1_port_display = f"{ip1}:{port1}" if port1 is not None and port1 != 0 else (ip1 if ip1 else "-")
+        ip2_port_display = f"{ip2}:{port2}" if port2 is not None and port2 != 0 else (ip2 if ip2 else "-")
+        xip1_port_display = f"{xip1}:{xport1}" if xip1 is not None and xport1 is not None and xport1 != 0 else (xip1 if xip1 else "-")
+        xip2_port_display = f"{xip2}:{xport2}" if xip2 is not None and xport2 is not None and xport2 != 0 else (xip2 if xip2 else "-")
 
         print(
-            f"{r_id:<4} {proto:<6} {interface:<10} {bytes_t:<8} {ip1:<16} {xip1_display:<16} {ip2:<16} {xip2_display:<16} "
+            f"{r_id:<4} {proto:<6} {interface:<10} {bytes_t:<8} {ip1_port_display:<22} {xip1_port_display:<22} {ip2_port_display:<22} {xip2_port_display:<22} "
             f"{idle:<10} {uptime_val if uptime_val else '-':<10} {flags}"
         )
-    print("-------------------------------------------------------------------------------------------------------------------------------------------\n")
+    print("-" * len(header))
+    print("\n")
 
 def print_top_flag_n_entries(conn, limit=50):
     """Queries and prints the top 50 connection entries where the 'flags' column contains 'N', 
@@ -627,9 +701,12 @@ def print_top_flag_n_entries(conn, limit=50):
     print(f"\n--- Top {limit} Connections with Flag 'N' by Bytes Transferred (Descending) ---")
     cursor = conn.cursor()
 
+    # Corrected SELECT statement to include port columns
     cursor.execute(f'''
         SELECT 
-            id, protocol, interface1, ip_addr1, xlated_ip1, ip_addr2, xlated_ip2, bytes_transferred, idle_time, uptime, flags
+            id, protocol, interface1, ip_addr1, port1, xlated_ip1, xlated_port1, 
+            ip_addr2, port2, xlated_ip2, xlated_port2, 
+            bytes_transferred, idle_time, uptime, flags
         FROM 
             connections
         WHERE
@@ -640,27 +717,33 @@ def print_top_flag_n_entries(conn, limit=50):
     ''', (limit,))
     rows = cursor.fetchall()
 
+    # Updated header to include ports and adjust widths
     header = (
-        f"{'ID':<4} {'PROTO':<6} {'IFACE1':<10} {'BYTES':<8} {'IP_ADDR1':<16} {'X-IP1':<16} {'IP_ADDR2':<16} {'X-IP2':<16} "
+        f"{'ID':<4} {'PROTO':<6} {'IFACE1':<10} {'BYTES':<8} {'IP1:PORT1':<22} {'X-IP1:X-PORT1':<22} {'IP2:PORT2':<22} {'X-IP2:X-PORT2':<22} "
         f"{'IDLE':<10} {'UPTIME':<10} {'FLAGS'}"
     )
     print(header)
-    print("-" * 145)
+    print("-" * len(header))
 
     if not rows:
         print("No connections found with 'N' flag.")
         return
 
     for row in rows:
-        r_id, proto, interface1, ip1, xip1, ip2, xip2, bytes_t, idle, uptime_val, flags = row
-        xip1_display = xip1 if xip1 else "-"
-        xip2_display = xip2 if xip2 else "-"
+        # Correct unpacking for the selected columns
+        r_id, proto, interface1, ip1, port1, xip1, xport1, ip2, port2, xip2, xport2, bytes_t, idle, uptime_val, flags = row
+        
+        ip1_port_display = f"{ip1}:{port1}" if port1 is not None and port1 != 0 else (ip1 if ip1 else "-")
+        ip2_port_display = f"{ip2}:{port2}" if port2 is not None and port2 != 0 else (ip2 if ip2 else "-")
+        xip1_port_display = f"{xip1}:{xport1}" if xip1 is not None and xport1 is not None and xport1 != 0 else (xip1 if xip1 else "-")
+        xip2_port_display = f"{xip2}:{xport2}" if xip2 is not None and xport2 is not None and xport2 != 0 else (xip2 if xip2 else "-")
 
         print(
-            f"{r_id:<4} {proto:<6} {interface1:<10} {bytes_t:<8} {ip1:<16} {xip1_display:<16} {ip2:<16} {xip2_display:<16} "
+            f"{r_id:<4} {proto:<6} {interface1:<10} {bytes_t:<8} {ip1_port_display:<22} {xip1_port_display:<22} {ip2_port_display:<22} {xip2_port_display:<22} "
             f"{idle:<10} {uptime_val if uptime_val else '-':<10} {flags}"
         )
-    print("-------------------------------------------------------------------------------------------------------------------------------------------\n")
+    print("-" * len(header))
+    print("\n")
 
 
 def print_ip_counts(conn):
@@ -856,7 +939,6 @@ def query_llm_for_sql(user_query: str) -> Optional[str]:
         print("[!] LLM API key is missing. Cannot process natural language query.")
         return None
         
-    # --- DEBUGGING CHECK ---
     print(f"[*] Debug Check: API Key is loaded (Length: {len(GEMINI_API_KEY)} chars).")
     
     # System Instruction: Define the LLM's role and the database schema
@@ -906,6 +988,24 @@ def query_llm_for_sql(user_query: str) -> Optional[str]:
             response.raise_for_status() # Raises HTTPError for bad responses (4xx or 5xx)
             result = response.json()
             
+            # --- ADDED DEBUGGING BLOCK ---
+            if 'candidates' not in result or not result['candidates']:
+                print(f"[!!!] LLM did not return any candidates (Attempt {attempt + 1}/{max_retries}).")
+                print(f"      Full LLM Response for debugging: {json.dumps(result, indent=2)}")
+                # Check for safety feedback if no candidates
+                if 'promptFeedback' in result and 'safetyRatings' in result['promptFeedback']:
+                    print("      Safety Feedback:")
+                    for rating in result['promptFeedback']['safetyRatings']:
+                        print(f"        Category: {rating['category']}, Probability: {rating['probability']}")
+                return None # Don't retry if no candidates
+            
+            # Check if 'content' or 'parts' are missing in the first candidate
+            if 'content' not in result['candidates'][0] or 'parts' not in result['candidates'][0]['content']:
+                print(f"[!!!] LLM candidate content structure unexpected (Attempt {attempt + 1}/{max_retries}).")
+                print(f"      Full LLM Response for debugging: {json.dumps(result, indent=2)}")
+                return None # Don't retry if content structure is wrong
+            # --- END ADDED DEBUGGING BLOCK ---
+
             # Extract the raw text (which should be the SQL query)
             sql_query = result['candidates'][0]['content']['parts'][0]['text'].strip()
             return sql_query
@@ -923,6 +1023,10 @@ def query_llm_for_sql(user_query: str) -> Optional[str]:
             print(f"[!] Request Error during LLM query (Attempt {attempt + 1}/{max_retries}): {e}")
         except (KeyError, IndexError) as e:
             print(f"[!] Parsing Error: LLM response structure unexpected (Attempt {attempt + 1}/{max_retries}): {e}")
+            # --- MODIFIED: Print the full result here too, as the KeyError happens before the added checks ---
+            if 'result' in locals(): # Check if 'result' variable exists from the try block
+                print(f"      Full LLM Response at time of KeyError: {json.dumps(result, indent=2)}")
+            # --- END MODIFIED ---
         
         # Exponential backoff before retrying
         if attempt < max_retries - 1:
@@ -1001,8 +1105,6 @@ def main():
     else:
         print(f"[*] No input file specified. Defaulting to: {INPUT_FILENAME}")
         
-        # FIX: Changed the f-string to a standard .format() call to resolve 
-        # the SyntaxError related to angle brackets inside an f-string.
         print("Usage: python {} <input_log_file_path>".format(sys.argv[0]))
 
 
@@ -1016,7 +1118,7 @@ def main():
     print("========================================================")
     
     # The full suite of required reports
-    print_database(conn)
+    # print_database(conn) # Commented out as requested
     print_top_bytes_entries(conn)
     print_top_idle_time_entries(conn)
     print_top_uptime_entries(conn)
