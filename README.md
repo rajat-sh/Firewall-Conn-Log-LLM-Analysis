@@ -236,7 +236,6 @@ The Natural Language Query (NLQ) interface uses the Google Gemini API to transla
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
----  
+
  
