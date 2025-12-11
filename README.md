@@ -111,11 +111,7 @@ You can run the script by providing the path to your FTD connection log file as 
 python ConnQuery_AI.py /path/to/your/ftd_conn_log.txt
 ```
 
-If no file path is provided, the script will look for a file named `asa_conn_log.txt` in the same directory.
 
-```bash
-python ConnQuery_AI.py
-```
 
 ### Initial Reports
 
