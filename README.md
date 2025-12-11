@@ -36,7 +36,7 @@ A Python tool designed to parse and analyze Cisco FTD (Firepower Threat Defense)
 
 ## Features
 
-*   **Log Parsing:** Automatically detects and parses three different formats of Cisco FTD `show conn` output (Format 1, Format 2, and Format 3, including multi-line entries).
+*   **Log Parsing:** Automatically detects and parses three different formats of Cisco FTD `show conn` output (show conn, show conn long, and show conn detail), including multi-line entries).
 *   **SQLite Database:** Stores all parsed connection data in a local `asa_connections.db` SQLite database for efficient querying.
 *   **Predefined Reports:** Generates a suite of initial reports, including:
     *   Top connections by bytes transferred.
