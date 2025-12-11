@@ -43,7 +43,7 @@ A Python tool designed to parse and analyze Cisco FTD (Firepower Threat Defense)
     *   Top connections by idle time.
     *   Top connections by uptime.
     *   Connections where source and destination interfaces are the same.
-    *   Connections with specific flags (e.g., 'N' for NAT/X-late).
+    *   Connections with specific flags (e.g., 'N' for snort inspected).
     *   Counts of IP addresses, ports, initiators, and responders.
 *   **Natural Language Query (NLQ) Interface:** Allows users to ask questions about their connection data in plain English, which is then converted into SQL queries using the Google Gemini API.
 *   **Extensible:** The SQLite database makes it easy to add custom queries or integrate with other analysis tools.
@@ -119,6 +119,17 @@ python ConnQuery_AI.py
 ### Initial Reports
 
 After successfully parsing the log file, the script will automatically generate and print a series of predefined analytical reports to the console. The detailed "Database Entries (Detailed View)" table is intentionally omitted from the initial reports for brevity, but other summary reports are displayed.
+ Top 50 Connections by Bytes Transferred (Descending)
+ Top 50 Connections by Idle Time (Descending)
+ Top 50 Connections by Uptime (Descending)
+ Top 50 Same-Interface Connections by Bytes Transferred (Descending)
+ Top 50 Connections with Flag 'N' by Bytes Transferred (Descending)
+ Top 50 Initiator IPs by Connection Count
+ Top 50 Responder IPs by Connection Count
+ Top 50 Initiator IPs (Flags containing 'N')
+ Top 50 Responder IPs (Flags containing 'N')
+ IP Address Counts (Descending)
+ Port Counts (Descending, Top 50)
 
 ### Natural Language Query Interface
 
