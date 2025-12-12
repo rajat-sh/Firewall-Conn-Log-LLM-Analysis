@@ -125,7 +125,7 @@ After successfully parsing the log file, the script will automatically generate 
  * Top 50 Responder IPs by Connection Count
  * Top 50 Initiator IPs (Flags containing 'N')
  * Top 50 Responder IPs (Flags containing 'N')
- * IP Address Counts (Descending)
+ * IP Address Counts (Descending, Top 50)
  * Port Counts (Descending, Top 50)
 
 ### Natural Language Query Interface
