@@ -217,7 +217,7 @@ def _parse_format1_line(line: str) -> Optional[Tuple[Any, ...]]:
             int2, ip_addr2, port2,
             None, None,
             idle_time,
-            None,
+            None,  # Uptime is not present in Format 1
             int(bytes_val_str), flags,
             None,
             None
@@ -329,7 +329,7 @@ def _parse_format3_line(full_record: str) -> Optional[Tuple[Any, ...]]:
         print(f"[!] Format 3 Internal Parsing Error on record: {full_record.strip()}. Error: {e}")
         return None
 
-def process_file(conn: sqlite3.Connection, filename: str):
+def process_file(conn: sqlite3.Connection, filename: str) -> Optional[int]:
     cursor = conn.cursor()
 
     cursor.execute('DELETE FROM connections')
@@ -369,7 +369,7 @@ def process_file(conn: sqlite3.Connection, filename: str):
 
         if format_type is None:
             print("[!] Error: Could not determine log format from the file content after scanning all lines. No valid connection record found.")
-            return
+            return None
 
         print(f"[*] Detected format: Format {format_type}")
 
@@ -430,9 +430,9 @@ def process_file(conn: sqlite3.Connection, filename: str):
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', data_batch)
             conn.commit()
-            total_processed += len(data_batch)
 
-        print(f"[*] Successfully processed {total_processed} entries from {filename} into database.")
+        print(f"[*] Successfully processed {total_processed + len(data_batch)} entries from {filename} into database.")
+        return format_type
 
     except FileNotFoundError:
         print(f"[!] Error: File {filename} not found. Please ensure the log file exists and contains data.")
@@ -1015,7 +1015,14 @@ def main():
                 sys.exit(0)
 
     conn = init_db()
-    process_file(conn, input_file_path)
+    # Capture the detected format to conditionally run reports
+    detected_format = process_file(conn, input_file_path)
+
+    # If file processing failed, exit gracefully
+    if detected_format is None:
+        conn.close()
+        cleanup()
+        sys.exit(1)
 
     print("\n\n========================================================")
     print("      INITIAL LOG ANALYSIS REPORTS        ")
@@ -1023,7 +1030,14 @@ def main():
 
     print_top_bytes_entries(conn)
     print_top_idle_time_entries(conn)
-    print_top_uptime_entries(conn)
+
+    # --- FIXED SECTION ---
+    # Only print the uptime report if the format supports it (2 or 3)
+    if detected_format in (2, 3):
+        print_top_uptime_entries(conn)
+    else:
+        print("\n--- Uptime Report Skipped (Format 1 has no uptime field) ---")
+
     print_same_interface_entries(conn)
     print_top_flag_n_entries(conn)
     print_top_initiators(conn)
