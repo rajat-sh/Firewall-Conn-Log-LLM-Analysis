@@ -50,9 +50,9 @@ def _is_blank(value: Any) -> bool:
     if value is None:
         return True
     if isinstance(value, (int, float)):
-        return value == 0
+        value = str(value) # Convert numeric 0 to string "0" for comparison below
     s = str(value).strip()
-    return s == "" or s.upper() == "NULL" or s == "-"
+    return s == "" or s.upper() == "NULL" or s == "-" or s == "0" # Also consider "0" as blank
 
 
 def _filter_columns(headers: List[str], rows: List[Dict[str, Any]]) -> List[str]:
@@ -159,6 +159,9 @@ def _time_to_seconds(time_str: str) -> int:
     if not time_str:
         return 0
 
+    # Clean up potential extra spaces in time string before parsing
+    time_str = re.sub(r'\s+', '', time_str).strip()
+
     if ':' in time_str:
         parts = [int(p) for p in time_str.split(':')]
         if len(parts) == 3:
@@ -188,8 +191,9 @@ def _parse_ip_port_slash(ip_port_str: str) -> Tuple[str, int]:
         return ip_port_str.replace(',', '').strip(), 0
 
 def _parse_format1_line(line: str) -> Optional[Tuple[Any, ...]]:
+    # Updated regex to be more precise about interface names and flexible for idle_time
     match = re.search(
-        r'(\w+)\s+([^:]+)\s+([^:]+:\d+)\s+([^:]+)\s+([^:]+:\d+),\s*idle\s+([^\s,]+),\s*bytes\s+(\d+),\s*flags\s+([^\s,]+)',
+        r'(\w+)\s+([a-zA-Z0-9_-]+)\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+)\s+([a-zA-Z0-9_-]+)\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+),\s*idle\s+([\d\s:]+),\s*bytes\s+(\d+),\s*flags\s+([^\s,]+)',
         line
     )
 
@@ -197,9 +201,10 @@ def _parse_format1_line(line: str) -> Optional[Tuple[Any, ...]]:
         return None
 
     try:
-        protocol, int1, ip1_raw, int2_full, ip2_raw, idle_time, bytes_val_str, flags = match.groups()
+        protocol, int1, ip1_raw, int2, ip2_raw, idle_time_raw, bytes_val_str, flags = match.groups()
 
-        int2 = int2_full.strip()
+        # Normalize idle_time: remove all internal whitespace and strip
+        idle_time = re.sub(r'\s+', '', idle_time_raw).strip()
 
         def parse_ip_port_colon(ip_port_str):
             try:
@@ -216,7 +221,7 @@ def _parse_format1_line(line: str) -> Optional[Tuple[Any, ...]]:
             None, None,
             int2, ip_addr2, port2,
             None, None,
-            idle_time,
+            idle_time, # Use the cleaned idle_time
             None,  # Uptime is not present in Format 1
             int(bytes_val_str), flags,
             None,
@@ -351,14 +356,17 @@ def process_file(conn: sqlite3.Connection, filename: str) -> Optional[int]:
             if not stripped_line:
                 continue
 
-            if re.search(r'^(UDP|TCP|ICMP|IP)\s+\w+:\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+\s+\(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+\)', stripped_line):
-                format_type = 3
-                start_processing_index = idx
-                break
-            elif re.search(r'^(UDP|TCP|ICMP|IP)\s+\w+\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+\s+\w+\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+,\s*idle\s+([^\s,]+)', stripped_line):
+            # Updated Format 1 detection with more precise interface names and flexible idle_time regex
+            if re.search(r'^(UDP|TCP|ICMP|IP)\s+([a-zA-Z0-9_-]+)\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+\s+([a-zA-Z0-9_-]+)\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+,\s*idle\s+([\d\s:]+)', stripped_line):
                 format_type = 1
                 start_processing_index = idx
                 break
+            # Existing Format 3 detection
+            elif re.search(r'^(UDP|TCP|ICMP|IP)\s+\w+:\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+\s+\(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+\)', stripped_line):
+                format_type = 3
+                start_processing_index = idx
+                break
+            # Existing Format 2 detection
             elif re.search(
                 r'^(UDP|TCP|ICMP|IP)\s+\S+:\s+\d{1,3}(?:\.\d{1,3}){3}/\d+',
                 stripped_line
