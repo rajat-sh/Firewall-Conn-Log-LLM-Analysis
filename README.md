@@ -126,6 +126,10 @@ After successfully parsing the log file, the script will automatically generate 
  * Top 50 Responder IPs (Flags containing 'N')
  * IP Address Counts (Descending, Top 50)
  * Port Counts (Descending, Top 50)
+ * Top 50 Connections by Forward Max Data Rate
+ * Top 50 Connections by reverse Max Data Rate
+ * Top 50 Connections by Forward current Data Rate
+ * Top 50 Connections by reverse current Data Rate
 
 ### Natural Language Query Interface
 
