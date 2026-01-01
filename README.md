@@ -76,18 +76,18 @@ Before running the script, ensure you have the following:
 ## Installation
 
 1.  **Clone the repository:**
-    ```bash
-    git clone https://github.com/your-username/ConnQuery_AI.git
+    
+    git clone https://github.com/rajat-sh/ConnQuery_AI.git
     cd ConnQuery_AI
-    ```
+    
     (Replace `your-username` with your actual GitHub username or the repository path.)
 
 2.  **Install Python dependencies:**
-    ```bash
+    
     pip install -r requirements.txt # (assuming you create a requirements.txt with 'requests')
     # OR
     pip install requests
-    ```
+    
 
 3.  **Set your Google Gemini API Key** as described in the [Prerequisites](#prerequisites) section.
 
