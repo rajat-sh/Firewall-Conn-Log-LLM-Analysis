@@ -139,7 +139,13 @@ def init_db() -> sqlite3.Connection:
             bytes_transferred INTEGER,
             flags TEXT,
             initiator_ip TEXT,
-            responder_ip TEXT
+            responder_ip TEXT,
+            forward_current_rate INTEGER,
+            reverse_current_rate INTEGER,
+            forward_max_rate INTEGER,
+            reverse_max_rate INTEGER,
+            forward_time_last_max TEXT,
+            reverse_time_last_max TEXT
         )
     ''')
     conn.commit()
@@ -149,7 +155,9 @@ def init_db() -> sqlite3.Connection:
         "  id INTEGER PRIMARY KEY, protocol TEXT, interface1 TEXT, ip_addr1 TEXT, port1 INTEGER,\n"
         "  xlated_ip1 TEXT, xlated_port1 INTEGER, interface2 TEXT, ip_addr2 TEXT, port2 INTEGER,\n"
         "  xlated_ip2 TEXT, xlated_port2 INTEGER, idle_time TEXT, uptime TEXT, bytes_transferred INTEGER,\n"
-        "  flags TEXT, initiator_ip TEXT, responder_ip TEXT\n"
+        "  flags TEXT, initiator_ip TEXT, responder_ip TEXT,\n"
+        "  forward_current_rate INTEGER, reverse_current_rate INTEGER, forward_max_rate INTEGER,\n"
+        "  reverse_max_rate INTEGER, forward_time_last_max TEXT, reverse_time_last_max TEXT\n"
         ")\n"
     )
     print("------------------------------------------")
@@ -224,8 +232,9 @@ def _parse_format1_line(line: str) -> Optional[Tuple[Any, ...]]:
             idle_time, # Use the cleaned idle_time
             None,  # Uptime is not present in Format 1
             int(bytes_val_str), flags,
-            None,
-            None
+            None, None,
+            # New data rate fields
+            None, None, None, None, None, None
         )
         return data
     except Exception as e:
@@ -255,7 +264,7 @@ def _parse_format2_record(full_record: str) -> Optional[Tuple[Any, ...]]:
     ip_addr1, port1 = _parse_ip_port_slash(ip1_raw)
     ip_addr2, port2 = _parse_ip_port_slash(ip2_raw)
 
-    flags_match = re.search(r'flags\s+([^\s,]+)', full_record)
+    flags_match = re.search(r'flags\s+-?\s*([^\s,]+)', full_record) # CORRECTED REGEX
     flags = flags_match.group(1).strip() if flags_match else ""
 
     idle_match = re.search(r'idle\s+([^\s,]+)', full_record)
@@ -281,7 +290,9 @@ def _parse_format2_record(full_record: str) -> Optional[Tuple[Any, ...]]:
         None, None,
         idle_time, uptime,
         bytes_val, flags,
-        initiator_ip, responder_ip
+        initiator_ip, responder_ip,
+        # New data rate fields
+        None, None, None, None, None, None
     )
 
 def _parse_format3_line(full_record: str) -> Optional[Tuple[Any, ...]]:
@@ -303,7 +314,7 @@ def _parse_format3_line(full_record: str) -> Optional[Tuple[Any, ...]]:
         xlated_ip1, xlated_port1 = _parse_ip_port_slash(xip1_raw)
         xlated_ip2, xlated_port2 = _parse_ip_port_slash(xip2_raw)
 
-        flags_match = re.search(r'flags\s+([^\s,]+)', full_record)
+        flags_match = re.search(r'flags\s+-?\s*([^\s,]+)', full_record) # CORRECTED REGEX
         flags = flags_match.group(1).strip() if flags_match else ""
 
         idle_match = re.search(r'idle\s+([^\s,]+)', full_record)
@@ -327,11 +338,160 @@ def _parse_format3_line(full_record: str) -> Optional[Tuple[Any, ...]]:
             int2, ip_addr2, port2, xlated_ip2, xlated_port2,
             idle_time, uptime,
             bytes_val, flags,
-            initiator_ip, responder_ip
+            initiator_ip, responder_ip,
+            # New data rate fields
+            None, None, None, None, None, None
         )
         return data
     except Exception as e:
         print(f"[!] Format 3 Internal Parsing Error on record: {full_record.strip()}. Error: {e}")
+        return None
+
+def _parse_format4_record(record_lines: List[str]) -> Optional[Tuple[Any, ...]]:
+    if not record_lines:
+        return None
+
+    full_record_text = ' '.join(line.strip() for line in record_lines)
+
+    try:
+        # --- Main line parsing (from format 2) ---
+        main_match = re.search(
+            r'^(UDP|TCP|ICMP|IP)\s+(\S+):\s*([\d\.]+/\d+)\s+(\S+):\s*([\d\.]+/\d+)',
+            record_lines[0]
+        )
+        if not main_match:
+            return None
+
+        protocol = main_match.group(1)
+        int1 = main_match.group(2).replace(':', '')
+        ip1_raw = main_match.group(3)
+        int2 = main_match.group(4).replace(':', '')
+        ip2_raw = main_match.group(5)
+
+        ip_addr1, port1 = _parse_ip_port_slash(ip1_raw)
+        ip_addr2, port2 = _parse_ip_port_slash(ip2_raw)
+
+        # --- Common fields from the full text block ---
+        flags_match = re.search(r'flags\s+-?\s*([^\s,]+)', full_record_text) # CORRECTED REGEX
+        flags = flags_match.group(1).strip() if flags_match else ""
+
+        idle_match = re.search(r'idle\s+([^\s,]+)', full_record_text)
+        idle_time = idle_match.group(1).strip() if idle_match else ""
+
+        uptime_match = re.search(r'uptime\s+([^\s,]+)', full_record_text)
+        uptime = uptime_match.group(1).strip() if uptime_match else None
+
+        bytes_match = re.search(r'bytes\s+(\d+)', full_record_text)
+        bytes_val = int(bytes_match.group(1)) if bytes_match else 0
+
+        init_resp_match = re.search(
+            r'Initiator:\s*([^,\s]+),\s*Responder:\s*([^,\s]+)',
+            full_record_text
+        )
+        initiator_ip = init_resp_match.group(1) if init_resp_match else None
+        responder_ip = init_resp_match.group(2) if init_resp_match else None
+
+        # --- New data rate fields ---
+        current_rate_match = re.search(r'current rate:\s*(\d+)/(\d+)', full_record_text)
+        forward_current_rate = int(current_rate_match.group(1)) if current_rate_match else None
+        reverse_current_rate = int(current_rate_match.group(2)) if current_rate_match else None
+
+        max_rate_match = re.search(r'max rate:\s*(\d+)/(\d+)', full_record_text)
+        forward_max_rate = int(max_rate_match.group(1)) if max_rate_match else None
+        reverse_max_rate = int(max_rate_match.group(2)) if max_rate_match else None
+
+        time_last_max_match = re.search(r'time since last max\s+([^\s/]+)/([^\s/]+)', full_record_text)
+        forward_time_last_max = time_last_max_match.group(1).strip() if time_last_max_match else None
+        reverse_time_last_max = time_last_max_match.group(2).strip() if time_last_max_match else None
+
+        # --- Assemble the final tuple ---
+        return (
+            protocol, int1, ip_addr1, port1,
+            None, None, # xlated_ip1, xlated_port1
+            int2, ip_addr2, port2,
+            None, None, # xlated_ip2, xlated_port2
+            idle_time, uptime,
+            bytes_val, flags,
+            initiator_ip, responder_ip,
+            forward_current_rate, reverse_current_rate,
+            forward_max_rate, reverse_max_rate,
+            forward_time_last_max, reverse_time_last_max
+        )
+    except Exception as e:
+        print(f"[!] Format 4 Internal Parsing Error on record: {' '.join(record_lines)}. Error: {e}")
+        return None
+
+def _parse_format5_record(record_lines: List[str]) -> Optional[Tuple[Any, ...]]:
+    if not record_lines:
+        return None
+
+    full_record_text = ' '.join(line.strip() for line in record_lines)
+
+    try:
+        # --- Main line parsing (from format 3) ---
+        main_regex = re.compile(
+            r'^(UDP|TCP|ICMP|IP)\s+([^:\s]+):\s*([^/\s]+/[\d\.]+)\s*\(([^/\s]+/[\d\.]+)\)\s*'
+            r'([^:\s]+):\s*([^/\s]+/[\d\.]+)\s*\(([^/\s]+/[\d\.]+)\)'
+        )
+        main_match = main_regex.search(record_lines[0])
+        if not main_match:
+            return None
+
+        protocol, int1, ip1_raw, xip1_raw, int2, ip2_raw, xip2_raw = main_match.groups()
+
+        ip_addr1, port1 = _parse_ip_port_slash(ip1_raw)
+        ip_addr2, port2 = _parse_ip_port_slash(ip2_raw)
+        xlated_ip1, xlated_port1 = _parse_ip_port_slash(xip1_raw)
+        xlated_ip2, xlated_port2 = _parse_ip_port_slash(xip2_raw)
+
+        # --- Common fields from the full text block ---
+        flags_match = re.search(r'flags\s+-?\s*([^\s,]+)', full_record_text) # CORRECTED REGEX
+        flags = flags_match.group(1).strip() if flags_match else ""
+
+        idle_match = re.search(r'idle\s+([^\s,]+)', full_record_text)
+        idle_time = idle_match.group(1).strip() if idle_match else ""
+
+        uptime_match = re.search(r'uptime\s+([^\s,]+)', full_record_text)
+        uptime = uptime_match.group(1).strip() if uptime_match else None
+
+        bytes_match = re.search(r'bytes\s+(\d+)', full_record_text)
+        bytes_val = int(bytes_match.group(1)) if bytes_match else 0
+
+        init_resp_match = re.search(
+            r'Initiator:\s*([^,\s]+),\s*Responder:\s*([^,\s]+)',
+            full_record_text
+        )
+        initiator_ip = init_resp_match.group(1) if init_resp_match else None
+        responder_ip = init_resp_match.group(2) if init_resp_match else None
+
+        # --- New data rate fields ---
+        current_rate_match = re.search(r'current rate:\s*(\d+)/(\d+)', full_record_text)
+        forward_current_rate = int(current_rate_match.group(1)) if current_rate_match else None
+        reverse_current_rate = int(current_rate_match.group(2)) if current_rate_match else None
+
+        max_rate_match = re.search(r'max rate:\s*(\d+)/(\d+)', full_record_text)
+        forward_max_rate = int(max_rate_match.group(1)) if max_rate_match else None
+        reverse_max_rate = int(max_rate_match.group(2)) if max_rate_match else None
+
+        time_last_max_match = re.search(r'time since last max\s+([^\s/]+)/([^\s/]+)', full_record_text)
+        forward_time_last_max = time_last_max_match.group(1).strip() if time_last_max_match else None
+        reverse_time_last_max = time_last_max_match.group(2).strip() if time_last_max_match else None
+
+        # --- Assemble the final tuple ---
+        return (
+            protocol, int1, ip_addr1, port1,
+            xlated_ip1, xlated_port1,
+            int2, ip_addr2, port2,
+            xlated_ip2, xlated_port2,
+            idle_time, uptime,
+            bytes_val, flags,
+            initiator_ip, responder_ip,
+            forward_current_rate, reverse_current_rate,
+            forward_max_rate, reverse_max_rate,
+            forward_time_last_max, reverse_time_last_max
+        )
+    except Exception as e:
+        print(f"[!] Format 5 Internal Parsing Error on record: {' '.join(record_lines)}. Error: {e}")
         return None
 
 def process_file(conn: sqlite3.Connection, filename: str) -> Optional[int]:
@@ -349,34 +509,38 @@ def process_file(conn: sqlite3.Connection, filename: str) -> Optional[int]:
         with open(filename, 'r') as f:
             lines = f.readlines()
 
-        # Format detection
+        # --- Advanced Format Detection ---
         start_processing_index = 0
-        for idx, line in enumerate(lines):
-            stripped_line = line.strip()
-            if not stripped_line:
-                continue
+        has_data_rate = any('data-rate forward/reverse' in line for line in lines)
+        
+        xlate_pattern_re = re.compile(r'^(UDP|TCP|ICMP|IP)\s+\S+:\s*[^(\s]+/\d+\s+\([^)]+\)')
+        has_xlate_pattern = any(xlate_pattern_re.search(line) for line in lines)
 
-            # Updated Format 1 detection with more precise interface names and flexible idle_time regex
-            if re.search(r'^(UDP|TCP|ICMP|IP)\s+([a-zA-Z0-9_-]+)\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+\s+([a-zA-Z0-9_-]+)\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+,\s*idle\s+([\d\s:]+)', stripped_line):
-                format_type = 1
-                start_processing_index = idx
-                break
-            # Existing Format 3 detection
-            elif re.search(r'^(UDP|TCP|ICMP|IP)\s+\w+:\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+\s+\(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d+\)', stripped_line):
-                format_type = 3
-                start_processing_index = idx
-                break
-            # Existing Format 2 detection
-            elif re.search(
-                r'^(UDP|TCP|ICMP|IP)\s+\S+:\s+\d{1,3}(?:\.\d{1,3}){3}/\d+',
-                stripped_line
-            ):
-                format_type = 2
-                start_processing_index = idx
-                break
-
+        if has_data_rate and has_xlate_pattern:
+            format_type = 5
+        elif has_data_rate:
+            format_type = 4
+        elif has_xlate_pattern:
+            format_type = 3
+        else:
+            # Fallback to older format detection if the above are not met
+            for idx, line in enumerate(lines):
+                stripped_line = line.strip()
+                if not stripped_line:
+                    continue
+                # Format 1
+                if re.search(r'^(UDP|TCP|ICMP|IP)\s+([a-zA-Z0-9_-]+)\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+\s+([a-zA-Z0-9_-]+)\s+\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d+,\s*idle\s+([\d\s:]+)', stripped_line):
+                    format_type = 1
+                    start_processing_index = idx
+                    break
+                # Format 2
+                elif re.search(r'^(UDP|TCP|ICMP|IP)\s+\S+:\s+\d{1,3}(?:\.\d{1,3}){3}/\d+', stripped_line):
+                    format_type = 2
+                    start_processing_index = idx
+                    break
+        
         if format_type is None:
-            print("[!] Error: Could not determine log format from the file content after scanning all lines. No valid connection record found.")
+            print("[!] Error: Could not determine log format from the file content. No valid connection record found.")
             return None
 
         print(f"[*] Detected format: Format {format_type}")
@@ -384,47 +548,75 @@ def process_file(conn: sqlite3.Connection, filename: str) -> Optional[int]:
         i = start_processing_index
         while i < len(lines):
             line = lines[i].strip()
-            i += 1
-
             if not line:
+                i += 1
                 continue
 
             record_data = None
-            full_record = line
+            record_block = [] # Used for multi-line formats 4 and 5
 
-            if format_type == 3:
-                if i < len(lines) and lines[i].strip().startswith('Initiator:'):
-                    full_record += " " + lines[i].strip()
+            if format_type in (4, 5):
+                if line.startswith(('UDP', 'TCP', 'ICMP', 'IP')):
+                    record_block.append(line)
+                    j = i + 1
+                    # Collect subsequent lines belonging to this record
+                    while j < len(lines) and lines[j].strip() and (lines[j].startswith((' ', '\t')) or 'Initiator:' in lines[j] or 'data-rate' in lines[j]):
+                        record_block.append(lines[j])
+                        j += 1
+                    
+                    if format_type == 5:
+                        record_data = _parse_format5_record(record_block)
+                    else: # format_type == 4
+                        record_data = _parse_format4_record(record_block)
+                    
+                    i = j # Move main index past this processed block
+                else:
+                    i += 1 # Move to the next line if this one isn't a start line
+                
+            elif format_type == 3:
+                full_record = line
+                if i + 1 < len(lines) and lines[i+1].strip().startswith('Initiator:'):
+                    full_record += " " + lines[i+1].strip()
                     i += 1
                 record_data = _parse_format3_line(full_record)
+                i += 1
 
             elif format_type == 2:
-                if i < len(lines) and lines[i].startswith((' ', '\t')) and ('flags' in lines[i] or 'bytes' in lines[i]):
-                    full_record += " " + lines[i].strip()
+                full_record = line
+                if i + 1 < len(lines) and lines[i+1].startswith((' ', '\t')) and ('flags' in lines[i+1] or 'bytes' in lines[i+1]):
+                    full_record += " " + lines[i+1].strip()
                     i += 1
-
-                if i < len(lines) and lines[i].strip().startswith('Initiator:'):
-                    full_record += " " + lines[i].strip()
+                if i + 1 < len(lines) and lines[i+1].strip().startswith('Initiator:'):
+                    full_record += " " + lines[i+1].strip()
                     i += 1
-
                 record_data = _parse_format2_record(full_record)
+                i += 1
 
             elif format_type == 1:
+                full_record = line
                 record_data = _parse_format1_line(full_record)
+                i += 1
+            
+            else: # Should not happen
+                i += 1
+                continue
 
-            if record_data and len(record_data) == 17:
+            if record_data and len(record_data) == 23:
                 data_batch.append(record_data)
                 total_processed += 1
             elif record_data:
-                print(f"[!] Warning: Parsed record has unexpected length {len(record_data)}. Expected 17. Skipping line: {full_record}")
+                full_record_text = ''.join(record_block) if record_block else line
+                print(f"[!] Warning: Parsed record has unexpected length {len(record_data)}. Expected 23. Skipping record: {full_record_text.strip()}")
 
             if len(data_batch) >= BATCH_SIZE:
                 cursor.executemany('''
                     INSERT INTO connections (
                         protocol, interface1, ip_addr1, port1, xlated_ip1, xlated_port1,
                         interface2, ip_addr2, port2, xlated_ip2, xlated_port2,
-                        idle_time, uptime, bytes_transferred, flags, initiator_ip, responder_ip
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        idle_time, uptime, bytes_transferred, flags, initiator_ip, responder_ip,
+                        forward_current_rate, reverse_current_rate, forward_max_rate,
+                        reverse_max_rate, forward_time_last_max, reverse_time_last_max
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', data_batch)
                 conn.commit()
                 data_batch = []
@@ -434,12 +626,14 @@ def process_file(conn: sqlite3.Connection, filename: str) -> Optional[int]:
                 INSERT INTO connections (
                     protocol, interface1, ip_addr1, port1, xlated_ip1, xlated_port1,
                     interface2, ip_addr2, port2, xlated_ip2, xlated_port2,
-                    idle_time, uptime, bytes_transferred, flags, initiator_ip, responder_ip
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    idle_time, uptime, bytes_transferred, flags, initiator_ip, responder_ip,
+                    forward_current_rate, reverse_current_rate, forward_max_rate,
+                    reverse_max_rate, forward_time_last_max, reverse_time_last_max
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', data_batch)
             conn.commit()
 
-        print(f"[*] Successfully processed {total_processed + len(data_batch)} entries from {filename} into database.")
+        print(f"[*] Successfully processed {total_processed} entries from {filename} into database.")
         return format_type
 
     except FileNotFoundError:
@@ -447,6 +641,8 @@ def process_file(conn: sqlite3.Connection, filename: str) -> Optional[int]:
         sys.exit(1)
     except Exception as e:
         print(f"[!] An unexpected error occurred during file processing: {e}")
+        import traceback
+        traceback.print_exc()
         sys.exit(1)
 
 
@@ -695,7 +891,7 @@ def print_top_flag_n_entries(conn, limit=50):
     cursor.execute('''
         SELECT
             protocol, interface1, ip_addr1, port1, xlated_ip1, xlated_port1,
-            ip_addr2, port2, xlated_ip2, xlated_port2,
+            interface2, ip_addr2, port2, xlated_ip2, xlated_port2,
             bytes_transferred, idle_time, uptime, flags
         FROM
             connections
@@ -709,7 +905,7 @@ def print_top_flag_n_entries(conn, limit=50):
 
     row_dicts = []
     for (proto, interface1, ip1, port1, xip1, xport1,
-         ip2, port2, xip2, xport2,
+         int2, ip2, port2, xip2, xport2,
          bytes_t, idle, uptime_val, flags) in rows:
 
         ip1_port = f"{ip1}:{port1}" if port1 else (ip1 or "")
@@ -720,6 +916,7 @@ def print_top_flag_n_entries(conn, limit=50):
         row_dicts.append({
             "PROTO": proto,
             "IFACE1": interface1,
+            "IFACE2": int2,
             "BYTES": bytes_t,
             "IP1:PORT1": ip1_port,
             "X-IP1:X-PORT1": xip1_port,
@@ -730,7 +927,7 @@ def print_top_flag_n_entries(conn, limit=50):
             "FLAGS": flags or "",
         })
 
-    headers = ["PROTO", "IFACE1", "BYTES", "IP1:PORT1", "X-IP1:X-PORT1",
+    headers = ["PROTO", "IFACE1", "IFACE2", "BYTES", "IP1:PORT1", "X-IP1:X-PORT1",
                "IP2:PORT2", "X-IP2:X-PORT2", "IDLE", "UPTIME", "FLAGS"]
     headers = _filter_columns(headers, row_dicts)
     _print_table_from_dicts(headers, row_dicts)
@@ -742,9 +939,9 @@ def print_ip_counts(conn, limit=50):
     cursor.execute('''
         SELECT ip_addr, COUNT(*) as count
         FROM (
-            SELECT ip_addr1 as ip_addr FROM connections
+            SELECT ip_addr1 as ip_addr FROM connections WHERE ip_addr1 IS NOT NULL
             UNION ALL
-            SELECT ip_addr2 as ip_addr FROM connections
+            SELECT ip_addr2 as ip_addr FROM connections WHERE ip_addr2 IS NOT NULL
             UNION ALL
             SELECT xlated_ip1 as ip_addr FROM connections WHERE xlated_ip1 IS NOT NULL
             UNION ALL
@@ -868,6 +1065,204 @@ def print_top_responders_with_n_flag(conn, limit=50):
     headers = _filter_columns(headers, row_dicts)
     _print_table_from_dicts(headers, row_dicts)
 
+def print_top_forward_max_rate(conn, limit=50):
+    print(f"\n--- Top {limit} Connections by Forward Max Data Rate ---")
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT
+            initiator_ip, responder_ip, ip_addr1, port1, ip_addr2, port2,
+            forward_current_rate, reverse_current_rate,
+            forward_max_rate, reverse_max_rate,
+            forward_time_last_max, reverse_time_last_max
+        FROM
+            connections
+        WHERE
+            forward_max_rate IS NOT NULL AND forward_max_rate > 0
+        ORDER BY
+            forward_max_rate DESC, id DESC
+        LIMIT ?
+    ''', (limit,))
+    rows = cursor.fetchall()
+
+    row_dicts = []
+    for (init_ip, resp_ip, ip1, p1, ip2, p2, fcr, rcr, fmr, rmr, ftlm, rtlm) in rows:
+        initiator_port, responder_port = (p1, p2) if init_ip == ip1 else (p2, p1)
+        
+        initiator_full = f"{init_ip}:{initiator_port}" if init_ip and initiator_port else init_ip
+        responder_full = f"{resp_ip}:{responder_port}" if resp_ip and responder_port else resp_ip
+
+        row_dicts.append({
+            "Initiator:Port": initiator_full,
+            "Responder:Port": responder_full,
+            "Fwd Curr Rate (Bps)": fcr,
+            "Rev Curr Rate (Bps)": rcr,
+            "Fwd Max Rate (Bps)": fmr,
+            "Rev Max Rate (Bps)": rmr,
+            "Fwd Time Last Max": ftlm,
+            "Rev Time Last Max": rtlm,
+        })
+
+    # Define the full set of headers in the desired order
+    all_headers = [
+        "Initiator:Port", "Responder:Port", "Fwd Curr Rate (Bps)", "Rev Curr Rate (Bps)",
+        "Fwd Max Rate (Bps)", "Rev Max Rate (Bps)", "Fwd Time Last Max", "Rev Time Last Max"
+    ]
+    
+    # Get the list of columns that would normally be kept
+    filtered_headers = _filter_columns(all_headers, row_dicts)
+
+    # Define the columns that must always be shown for this specific report
+    forced_columns = ["Fwd Curr Rate (Bps)", "Rev Curr Rate (Bps)", "Fwd Time Last Max", "Rev Time Last Max"]
+    
+    # Rebuild the final header list, respecting the original order
+    final_headers = []
+    for h in all_headers:
+        # A column should be included if it's not normally filtered out,
+        # OR if it's one of the columns we are forcing to be visible.
+        if h in filtered_headers or h in forced_columns:
+            if h not in final_headers:
+                final_headers.append(h)
+    
+    # Use the final, adjusted list of headers to print the table
+    _print_table_from_dicts(final_headers, row_dicts)
+
+
+def print_top_reverse_max_rate(conn, limit=50):
+    print(f"\n--- Top {limit} Connections by Reverse Max Data Rate ---")
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT
+            initiator_ip, responder_ip, ip_addr1, port1, ip_addr2, port2,
+            forward_current_rate, reverse_current_rate,
+            forward_max_rate, reverse_max_rate,
+            forward_time_last_max, reverse_time_last_max
+        FROM
+            connections
+        WHERE
+            reverse_max_rate IS NOT NULL AND reverse_max_rate > 0
+        ORDER BY
+            reverse_max_rate DESC, id DESC
+        LIMIT ?
+    ''', (limit,))
+    rows = cursor.fetchall()
+
+    row_dicts = []
+    for (init_ip, resp_ip, ip1, p1, ip2, p2, fcr, rcr, fmr, rmr, ftlm, rtlm) in rows:
+        initiator_port, responder_port = (p1, p2) if init_ip == ip1 else (p2, p1)
+
+        initiator_full = f"{init_ip}:{initiator_port}" if init_ip and initiator_port else init_ip
+        responder_full = f"{resp_ip}:{responder_port}" if resp_ip and responder_port else resp_ip
+
+        row_dicts.append({
+            "Initiator:Port": initiator_full,
+            "Responder:Port": responder_full,
+            "Fwd Curr Rate (Bps)": fcr,
+            "Rev Curr Rate (Bps)": rcr,
+            "Fwd Max Rate (Bps)": fmr,
+            "Rev Max Rate (Bps)": rmr,
+            "Fwd Time Last Max": ftlm,
+            "Rev Time Last Max": rtlm,
+        })
+
+    headers = [
+        "Initiator:Port", "Responder:Port", "Fwd Curr Rate (Bps)", "Rev Curr Rate (Bps)",
+        "Fwd Max Rate (Bps)", "Rev Max Rate (Bps)", "Fwd Time Last Max", "Rev Time Last Max"
+    ]
+    headers = _filter_columns(headers, row_dicts)
+    _print_table_from_dicts(headers, row_dicts)
+
+def print_top_forward_current_rate(conn, limit=50):
+    print(f"\n--- Top {limit} Connections by Forward Current Data Rate ---")
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT
+            initiator_ip, responder_ip, ip_addr1, port1, ip_addr2, port2,
+            forward_current_rate, reverse_current_rate,
+            forward_max_rate, reverse_max_rate,
+            forward_time_last_max, reverse_time_last_max
+        FROM
+            connections
+        WHERE
+            forward_current_rate IS NOT NULL AND forward_current_rate > 0
+        ORDER BY
+            forward_current_rate DESC, id DESC
+        LIMIT ?
+    ''', (limit,))
+    rows = cursor.fetchall()
+
+    row_dicts = []
+    for (init_ip, resp_ip, ip1, p1, ip2, p2, fcr, rcr, fmr, rmr, ftlm, rtlm) in rows:
+        initiator_port, responder_port = (p1, p2) if init_ip == ip1 else (p2, p1)
+
+        initiator_full = f"{init_ip}:{initiator_port}" if init_ip and initiator_port else init_ip
+        responder_full = f"{resp_ip}:{responder_port}" if resp_ip and responder_port else resp_ip
+
+        row_dicts.append({
+            "Initiator:Port": initiator_full,
+            "Responder:Port": responder_full,
+            "Fwd Curr Rate (Bps)": fcr,
+            "Rev Curr Rate (Bps)": rcr,
+            "Fwd Max Rate (Bps)": fmr,
+            "Rev Max Rate (Bps)": rmr,
+            "Fwd Time Last Max": ftlm,
+            "Rev Time Last Max": rtlm,
+        })
+
+    headers = [
+        "Initiator:Port", "Responder:Port", "Fwd Curr Rate (Bps)", "Rev Curr Rate (Bps)",
+        "Fwd Max Rate (Bps)", "Rev Max Rate (Bps)", "Fwd Time Last Max", "Rev Time Last Max"
+    ]
+    headers = _filter_columns(headers, row_dicts)
+    _print_table_from_dicts(headers, row_dicts)
+
+def print_top_reverse_current_rate(conn, limit=50):
+    print(f"\n--- Top {limit} Connections by Reverse Current Data Rate ---")
+    cursor = conn.cursor()
+
+    cursor.execute('''
+        SELECT
+            initiator_ip, responder_ip, ip_addr1, port1, ip_addr2, port2,
+            forward_current_rate, reverse_current_rate,
+            forward_max_rate, reverse_max_rate,
+            forward_time_last_max, reverse_time_last_max
+        FROM
+            connections
+        WHERE
+            reverse_current_rate IS NOT NULL AND reverse_current_rate > 0
+        ORDER BY
+            reverse_current_rate DESC, id DESC
+        LIMIT ?
+    ''', (limit,))
+    rows = cursor.fetchall()
+
+    row_dicts = []
+    for (init_ip, resp_ip, ip1, p1, ip2, p2, fcr, rcr, fmr, rmr, ftlm, rtlm) in rows:
+        initiator_port, responder_port = (p1, p2) if init_ip == ip1 else (p2, p1)
+
+        initiator_full = f"{init_ip}:{initiator_port}" if init_ip and initiator_port else init_ip
+        responder_full = f"{resp_ip}:{responder_port}" if resp_ip and responder_port else resp_ip
+
+        row_dicts.append({
+            "Initiator:Port": initiator_full,
+            "Responder:Port": responder_full,
+            "Fwd Curr Rate (Bps)": fcr,
+            "Rev Curr Rate (Bps)": rcr,
+            "Fwd Max Rate (Bps)": fmr,
+            "Rev Max Rate (Bps)": rmr,
+            "Fwd Time Last Max": ftlm,
+            "Rev Time Last Max": rtlm,
+        })
+
+    headers = [
+        "Initiator:Port", "Responder:Port", "Fwd Curr Rate (Bps)", "Rev Curr Rate (Bps)",
+        "Fwd Max Rate (Bps)", "Rev Max Rate (Bps)", "Fwd Time Last Max", "Rev Time Last Max"
+    ]
+    headers = _filter_columns(headers, row_dicts)
+    _print_table_from_dicts(headers, row_dicts)
+
 
 # --- LLM INTEGRATION FUNCTIONS ---
 
@@ -878,7 +1273,7 @@ def query_llm_for_sql(user_query: str) -> Optional[str]:
         print("[!] LLM API key is missing. Cannot process natural language query.")
         return None
 
-    print(f"[*] Debug Check: API Key is loaded (Length: {len(GEMINI_API_KEY)} chars).")
+    # print(f"[*] Debug Check: API Key is loaded (Length: {len(GEMINI_API_KEY)} chars).")
 
     system_instruction = (
         "You are an expert SQLite SQL query generator. Your task is to convert a user's natural "
@@ -893,7 +1288,10 @@ def query_llm_for_sql(user_query: str) -> Optional[str]:
         "    interface2 TEXT, ip_addr2 TEXT, port2 INTEGER,\n"
         "    xlated_ip2 TEXT, xlated_port2 INTEGER,\n"
         "    idle_time TEXT, uptime TEXT, bytes_transferred INTEGER,\n"
-        "    flags TEXT, initiator_ip TEXT, responder_ip TEXT\n"
+        "    flags TEXT, initiator_ip TEXT, responder_ip TEXT,\n"
+        "    forward_current_rate INTEGER, reverse_current_rate INTEGER,\n"
+        "    forward_max_rate INTEGER, reverse_max_rate INTEGER,\n"
+        "    forward_time_last_max TEXT, reverse_time_last_max TEXT\n"
         ")"
     )
 
@@ -1039,12 +1437,11 @@ def main():
     print_top_bytes_entries(conn)
     print_top_idle_time_entries(conn)
 
-    # --- FIXED SECTION ---
-    # Only print the uptime report if the format supports it (2 or 3)
-    if detected_format in (2, 3):
+    # Only print the uptime report if the format supports it
+    if detected_format in (2, 3, 4, 5):
         print_top_uptime_entries(conn)
     else:
-        print("\n--- Uptime Report Skipped (Format 1 has no uptime field) ---")
+        print("\n--- Uptime Report Skipped (Format does not contain uptime field) ---")
 
     print_same_interface_entries(conn)
     print_top_flag_n_entries(conn)
@@ -1054,6 +1451,16 @@ def main():
     print_top_responders_with_n_flag(conn)
     print_ip_counts(conn, 50)
     print_port_counts(conn, 50)
+    
+    # Only print the data rate reports if the format supports it
+    if detected_format in (4, 5):
+        print_top_forward_max_rate(conn)
+        print_top_reverse_max_rate(conn)
+        print_top_forward_current_rate(conn)
+        print_top_reverse_current_rate(conn)
+    else:
+        print("\n--- Data Rate Reports Skipped (Format does not contain data rate info) ---")
+
 
     print("\n========================================================")
     print("      NATURAL LANGUAGE DATABASE QUERY INTERFACE        ")
