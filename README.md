@@ -1,17 +1,15 @@
-
-
-
 # 🛡️ Cisco ASA Firewall AI Agent
 
-A Python-based AI tool that parses massive Cisco ASA firewall connection logs, structures them into a local SQLite database, and allows you to analyze your network traffic using natural language queries. 
+A robust, memory-optimized Python tool designed to parse massive Cisco ASA firewall connection logs. It structures the data into a local SQLite database and provides dual analysis modes: **Lightning-fast Static Statistical Reports** and an **OpenAI-powered Natural Language Chat Interface**.
 
-Powered by **OpenAI** and **LangChain**, this tool translates English questions into complex SQL queries, executes them against your log data, and returns human-readable answers along with the exact SQL used.
+Whether you just need a quick summary of top talkers, or you want to ask complex questions like *"Which IP transferred the most bytes on port 443?"*, this tool handles it effortlessly.
 
-## ✨ Features
-- **Memory-Optimized Parsing**: Handles extremely large (1GB+) log files effortlessly using a generator-based streaming architecture.
-- **Natural Language Interface**: Ask questions like *"Which IP transferred the most bytes?"* or *"List all connections dropped on port 443."*
-- **Dual Interfaces**: Includes a lightning-fast Command Line Interface (CLI) and a beautiful, interactive Streamlit Web App.
-- **Enterprise Ready**: Built-in support for bypassing strict corporate SSL/TLS packet inspection.
+## ✨ Key Features
+- **Memory-Optimized Parsing:** Uses a generator-based streaming architecture to process extremely large (1GB+) log files using almost zero RAM.
+- **Optional AI Integration:** Don't have an OpenAI API key? No problem! The tool defaults to generating powerful static reports (Top IPs, Top Ports, Highest Bytes, Idle Times) completely offline.
+- **Natural Language Querying:** Feed the AI your API key, and it translates English questions into complex SQL, queries your database locally, and explains the results.
+- **Dual Interfaces:** Choose between a lightweight Command Line Interface (CLI) or a modern, interactive Web App (Streamlit).
+- **Enterprise-Ready:** Built-in SSL Verification bypass ensures the tool works seamlessly behind strict corporate proxies and firewalls.
 
 ---
 
@@ -19,7 +17,7 @@ Powered by **OpenAI** and **LangChain**, this tool translates English questions 
 
 **Prerequisites:**
 - Python 3.8 or higher installed on your system.
-- An [OpenAI API Key](https://platform.openai.com/api-keys).
+- *(Optional)* An [OpenAI API Key](https://platform.openai.com/api-keys) if you want to use the AI chat features.
 
 **1. Clone the repository:**
 ```bash
@@ -44,7 +42,7 @@ cd asa-log-analyzer
 pip install -r requirements.txt
 ```
 
-**4. Configure your API Key:**
+**4. Configure your API Key (Optional):**
 Rename the `.env.example` file to `.env` and paste your OpenAI API key inside:
 ```text
 OPENAI_API_KEY=sk-your-secret-api-key-here
@@ -54,45 +52,54 @@ OPENAI_API_KEY=sk-your-secret-api-key-here
 
 ## 🚀 How to Use
 
-You can choose to run this tool as a Web Application or as a Command Line Interface (CLI).
-
 ### Option A: The Web Application (Streamlit)
-Provides a modern, interactive User Interface directly in your web browser. It allows you to drag-and-drop log files and view static analysis reports alongside an AI chat interface.
+A modern, interactive User Interface directly in your web browser. Features drag-and-drop file uploads (accepts any file extension) and interactive chat.
 
 **To start the web app:**
 ```bash
 streamlit run web_app.py
 ```
 1. A new tab will automatically open in your web browser (usually at `http://localhost:8501`).
-2. Upload your `.log` or `.txt` file using the sidebar.
-3. Once processed, you can expand the initial reports or start chatting with the AI!
+2. *(Optional)* Provide your API key in the sidebar if it isn't in your `.env` file.
+3. Upload your log file and click **Process File**.
+4. View the static reports in the dropdown, or chat with the AI!
 
 ### Option B: The Command Line Interface (CLI)
-A fast, lightweight terminal interface perfect for quick lookups or running on remote servers without a graphical interface.
+A fast, lightweight terminal interface perfect for massive files (2GB+) or running on headless servers.
 
 **To start the CLI app:**
 ```bash
 python cli_app.py
 ```
-1. The terminal will prompt you to provide the path to your log file (e.g., `C:\logs\asa.txt`).
-2. The script will parse the file, print initial statistical reports, and drop you into an interactive `Query >` prompt.
-3. Type your natural language questions. Type `quit` to securely clean up the database and exit.
+1. You will be prompted for an API key. (Press `Enter` to skip and run Static Analysis only).
+2. Provide the local path to your log file (e.g., `C:\logs\asa.txt`).
+3. The script will parse the file, print statistical reports, and drop you into an interactive `Query >` prompt (if an API key was provided). Type `quit` to exit safely.
 
 ---
 
-## 🔧 Troubleshooting
+## 🔧 Advanced Configuration & Troubleshooting
+
+**Handling Massive Files in the Web UI (200MB+ Limit)**
+By default, Streamlit limits uploads to 200MB to protect your browser's memory. To analyze 1GB+ files in the Web UI, you can bypass this limit by starting the app with this command:
+```bash
+streamlit run web_app.py --server.maxUploadSize 2048
+```
+*(Note: Uploading 2GB files via a web browser requires significant RAM. If your browser crashes, simply use the CLI version (`python cli_app.py`), which reads directly from your hard drive with zero memory overhead!)*
 
 **`[SSL: CERTIFICATE_VERIFY_FAILED]` Error**
-If you are on a corporate network with a firewall that inspects HTTPS traffic, Python might block the connection to OpenAI. 
-- **Web App**: Check the "Bypass SSL Verification" box in the sidebar before uploading your file.
-- **CLI App**: Run the script with the ignore-ssl flag: `python cli_app.py --ignore-ssl`
+If you are on a corporate network that inspects HTTPS traffic, Python may block the connection to OpenAI. 
+- **Web App**: Check the "Bypass SSL Verification" box in the sidebar (Checked by default).
+- **CLI App**: The CLI automatically bypasses this behind the scenes for you.
+
+**`ModuleNotFoundError: No module named 'torch'` (Console Spam)**
+When running the Web App, you may see red warnings in your terminal about missing the `torch` module. **You can safely ignore these.** Streamlit aggressively scans installed libraries (like LangChain), which optionally look for PyTorch. Since we are using cloud APIs, PyTorch is not required and this warning does not affect the app.
 
 ---
 
 ## 📁 Repository Structure
-- `cli_app.py` - The core logic and terminal-based application.
+- `cli_app.py` - The core parsing logic and terminal-based application.
 - `web_app.py` - The Streamlit-based graphical user interface.
-- `requirements.txt` - Python dependencies needed to run the apps.
+- `requirements.txt` - Python dependencies.
 - `.env.example` - Template for configuring environment variables.
 ```  
  
