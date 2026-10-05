@@ -6,6 +6,11 @@ import time
 import httpx
 from typing import List, Tuple, Optional, Dict, Any
 
+
+# Hide LangChain Deprecation Warnings from the console
+warnings.filterwarnings("ignore", category=DeprecationWarning) # <-- Add this
+
+
 # --- DEPENDENCY IMPORTS ---
 try:
     from langchain_community.utilities.sql_database import SQLDatabase

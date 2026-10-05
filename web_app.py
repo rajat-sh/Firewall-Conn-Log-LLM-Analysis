@@ -7,6 +7,10 @@ import io
 from contextlib import redirect_stdout
 from dotenv import load_dotenv
 
+# Hide LangChain Deprecation Warnings from the console
+warnings.filterwarnings("ignore", category=DeprecationWarning) # <-- Add this
+
+
 # LangChain imports
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_openai import ChatOpenAI
@@ -84,16 +88,16 @@ with st.sidebar:
     
     env_api_key = os.environ.get("OPENAI_API_KEY", "")
     
-    # Notice we label it as (Optional)
     api_key = st.text_input("OpenAI API Key (Optional)", value=env_api_key, type="password", help="Leave blank if you only want the static reports without AI chat.")
     
-    ignore_ssl = st.checkbox("Bypass SSL Verification", help="Check this if you are on a corporate network and receive Certificate errors.")
+    ignore_ssl = st.checkbox("Bypass SSL Verification", value=True,help="Check this if you are on a corporate network and receive Certificate errors.")
     
     st.divider()
     st.header("File Upload")
-    uploaded_file = st.file_uploader("Upload ASA Log File (.txt or .log)", type=["txt", "log"])
+    
+    # REMOVED the type=["txt", "log"] restriction so it accepts ANY file extension
+    uploaded_file = st.file_uploader("Upload ASA Log File (Any extension)")
 
-    # Notice we removed 'and api_key' from this condition so the button works without it!
     if st.button("Process File") and uploaded_file:
         with st.spinner("Processing file... Please wait."):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".log") as tmp_log:
@@ -151,7 +155,6 @@ with st.sidebar:
                     st.session_state["db_path"] = tmp_db_path
                     st.success(f"Successfully processed {row_count} records! AI Chat is enabled.")
                 else:
-                    # If they didn't provide a key, clear any old agent and let them know
                     st.session_state["agent"] = None
                     st.success(f"Successfully processed {row_count} records! Generated Static Reports only (No API Key provided).")
             else:
@@ -175,7 +178,6 @@ if user_question := st.chat_input("Ask a question about your firewall logs..."):
     st.session_state["messages"].append({"role": "user", "content": user_question})
     
     if st.session_state["agent"] is None:
-        # Tell the user exactly why the chat isn't working
         error_msg = "LLM Chat is disabled because no OpenAI API Key was provided. Please add your key in the sidebar and re-process the file to chat!"
         st.chat_message("assistant").write(error_msg)
         st.session_state["messages"].append({"role": "assistant", "content": error_msg})
