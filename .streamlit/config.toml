@@ -1,4 +1,3 @@
-
 [server]
-# Set max upload size to 1024 MB (1 GB). Change this number if you need more!
-maxUploadSize = 1024
+# Set max upload size to 2048 MB (2 GB)
+maxUploadSize = 2048
