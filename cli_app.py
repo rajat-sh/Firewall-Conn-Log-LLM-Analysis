@@ -5,8 +5,7 @@ import re
 import time
 import httpx
 from typing import List, Tuple, Optional, Dict, Any
-from dotenv import load_dotenv
-load_dotenv()
+
 # --- DEPENDENCY IMPORTS ---
 try:
     from langchain_community.utilities.sql_database import SQLDatabase
@@ -51,7 +50,6 @@ def _is_blank(value: Any) -> bool:
 def _filter_columns(headers: List[str], rows: List[Dict[str, Any]]) -> List[str]:
     if not rows:
         return headers
-
     kept = []
     for h in headers:
         any_non_blank = any(not _is_blank(r.get(h)) for r in rows)
@@ -133,17 +131,12 @@ def init_db() -> sqlite3.Connection:
 def _time_to_seconds(time_str: str) -> int:
     if not time_str:
         return 0
-
     time_str = re.sub(r'\s+', '', time_str).strip()
-
     if ':' in time_str:
         parts = [int(p) for p in time_str.split(':')]
-        if len(parts) == 3:
-            return parts[0] * 3600 + parts[1] * 60 + parts[2]
-        elif len(parts) == 2:
-            return parts[0] * 60 + parts[1]
+        if len(parts) == 3: return parts[0] * 3600 + parts[1] * 60 + parts[2]
+        elif len(parts) == 2: return parts[0] * 60 + parts[1]
         return 0
-
     total_seconds = 0
     m_match = re.search(r'(\d+)m', time_str)
     if m_match: total_seconds += int(m_match.group(1)) * 60
@@ -515,117 +508,132 @@ def print_port_counts(conn, limit=50):
 # --- MAIN EXECUTION ---
 
 def main():
-    # 1. Capture API Key securely
-    api_key = os.environ.get('OPENAI_API_KEY')
-    if not api_key:
-        api_key = input("Please enter your OpenAI API key (sk-...): ").strip()
-        if not api_key:
-            print("[!] An API key is required to use the LLM.")
-            sys.exit(1)
+    # 1. Load Environment Variables gracefully
+    try:
+        from dotenv import load_dotenv
+        load_dotenv(override=True)
+    except ImportError:
+        pass 
 
-    # 2. Configure HTTP Client (Ignores SSL verification if you are behind a corporate firewall)
-    # This prevents the CERTIFICATE_VERIFY_FAILED error.
-    http_client = httpx.Client(verify=False)
-
-    # 3. Get the local file path
-    input_file_path = None
-    if len(sys.argv) > 1:
-        input_file_path = sys.argv[1]
-    else:
-        while True:
-            user_input = input("Please enter the local path to the ASA connection log file (or press Enter to exit): ").strip()
-            # Strip quotes in case the user dragged-and-dropped the file into the terminal
-            user_input = user_input.strip("'\"") 
-            if user_input:
-                input_file_path = user_input
-                break
-            else:
-                sys.exit(0)
-
-    if not os.path.isfile(input_file_path):
-        print(f"[!] Error: File '{input_file_path}' not found.")
-        sys.exit(1)
-
-    # 4. Initialize Database and Process the Log
-    conn = init_db()
-    detected_format = process_file(conn, input_file_path)
-
-    if detected_format is None:
-        conn.close()
-        sys.exit(1)
-
-    # Print static reports
-    print("\n\n========================================================")
-    print("      INITIAL LOG ANALYSIS REPORTS        ")
-    print("========================================================")
-    print_top_bytes_entries(conn)
-    print_top_idle_time_entries(conn)
-    print_same_interface_entries(conn) 
-    print_top_flag_n_entries(conn)
-    print_ip_counts(conn, 50)
-    print_port_counts(conn, 50)
-
-    print("\n========================================================")
-    print("      LANGCHAIN SQL AGENT INTERFACE        ")
-    print("========================================================")
-
-    print("[*] Initializing LangChain AI Agent...")
+    conn = None 
     
     try:
-        # We wrap our SQLite database into a LangChain SQLDatabase object.
-        # Notice we use the URI format "sqlite:///"
-        sql_db = SQLDatabase.from_uri(f"sqlite:///{DB_NAME}")
-        
-        # We initialize the OpenAI Chat Model
-        llm = ChatOpenAI(
-            model=LLM_MODEL, 
-            api_key=api_key, 
-            temperature=0.0,
-            http_client=http_client # Passes the SSL-bypassed client
-        )
-        
-        # We create the Agent, binding the LLM and the Database together
-        agent_executor = create_sql_agent(
-            llm=llm,
-            db=sql_db,
-            agent_type="openai-tools",
-            prefix=CUSTOM_ASA_PREFIX,
-            verbose=False # Set to True if you want to see the AI's internal thought process
-        )
+        # 2. Capture API Key (Now Optional!)
+        llm_enabled = True
+        api_key = os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            print("\n" + "="*60)
+            api_key = input("Please enter your OpenAI API key (sk-...)\n[Press ENTER to skip and use Static Analysis only]: ").strip()
+            if not api_key:
+                print("\n[*] No API key provided. Natural language chatting will be disabled.")
+                llm_enabled = False
 
-        print("[*] LLM interface is active.")
-        print("Try queries like: 'show me the top 10 protocols by count',")
-        print("or 'list all connections where the initiator is 192.168.2.20'.")
-        print("Type 'exit' or 'quit' to end the session.")
+        # 3. Configure HTTP Client (Ignores SSL verification for enterprise firewalls)
+        http_client = httpx.Client(verify=False)
 
-        # 5. Interactive Loop
-        while True:
-            try:
-                user_input = input("\nQuery > ").strip()
-                if user_input.lower() in ['exit', 'quit']:
+        # 4. Get the local file path
+        input_file_path = None
+        if len(sys.argv) > 1:
+            input_file_path = sys.argv[1]
+        else:
+            while True:
+                user_input = input("\nPlease enter the local path to the ASA connection log file (or press Enter to exit): ").strip()
+                user_input = user_input.strip("'\"") 
+                if user_input:
+                    input_file_path = user_input
                     break
-                if not user_input:
-                    continue
+                else:
+                    sys.exit(0)
 
-                print("Thinking...")
-                
-                # Invoke the agent. It will translate, query, and format the response automatically.
-                response = agent_executor.invoke({"input": user_input})
-                
-                print("\nAnswer:")
-                print(response["output"])
-                print("-" * 60)
+        if not os.path.isfile(input_file_path):
+            print(f"[!] Error: File '{input_file_path}' not found.")
+            sys.exit(1)
 
-            except Exception as e:
-                print(f"\n[!] An unhandled error occurred in the query loop: {e}")
+        # 5. Initialize Database and Process the Log
+        conn = init_db()
+        detected_format = process_file(conn, input_file_path)
+
+        if detected_format is None:
+            sys.exit(1)
+
+        # Print static reports (These happen regardless of API key!)
+        print("\n\n========================================================")
+        print("      INITIAL LOG ANALYSIS REPORTS (STATIC)       ")
+        print("========================================================")
+        print_top_bytes_entries(conn)
+        print_top_idle_time_entries(conn)
+        print_same_interface_entries(conn) 
+        print_top_flag_n_entries(conn)
+        print_ip_counts(conn, 50)
+        print_port_counts(conn, 50)
+
+        # 6. Check if we should initialize the LLM
+        if llm_enabled:
+            print("\n========================================================")
+            print("      LANGCHAIN SQL AGENT INTERFACE        ")
+            print("========================================================")
+            print("[*] Initializing LangChain AI Agent...")
+            
+            sql_db = SQLDatabase.from_uri(f"sqlite:///{DB_NAME}")
+            
+            llm = ChatOpenAI(
+                model=LLM_MODEL, 
+                api_key=api_key, 
+                temperature=0.0,
+                http_client=http_client
+            )
+            
+            agent_executor = create_sql_agent(
+                llm=llm,
+                db=sql_db,
+                agent_type="openai-tools",
+                prefix=CUSTOM_ASA_PREFIX,
+                verbose=False 
+            )
+
+            print("[*] LLM interface is active.")
+            print("Try queries like: 'show me the top 10 protocols by count'")
+            print("Type 'exit' or 'quit' to end the session.\n")
+
+            # Interactive Chat Loop
+            while True:
+                try:
+                    user_input = input("Query > ").strip()
+                    if user_input.lower() in ['exit', 'quit']:
+                        print("\nShutting down gracefully...")
+                        break
+                    if not user_input:
+                        continue
+
+                    print("Thinking...")
+                    
+                    response = agent_executor.invoke({"input": user_input})
+                    
+                    print("\nAnswer:")
+                    print(response["output"])
+                    print("-" * 60 + "\n")
+
+                except KeyboardInterrupt:
+                    print("\n[!] User interrupted session (Ctrl+C). Shutting down...")
+                    break
+                except Exception as e:
+                    print(f"\n[!] An unhandled error occurred in the query loop: {e}\n")
+        else:
+            print("\n========================================================")
+            print("[*] Static Analysis Complete.")
+            print("[*] Exiting program because no OpenAI API key was provided.")
+            print("========================================================\n")
 
     except Exception as e:
-         print(f"\n[!] Failed to initialize LangChain Agent: {e}")
+         print(f"\n[!] A fatal error occurred: {e}")
 
-    # Cleanup
-    conn.close()
-    if os.path.exists(DB_NAME):
-        os.remove(DB_NAME)
+    finally:
+        # 7. Safe Cleanup (Guaranteed to execute)
+        if conn:
+            conn.close()
+        if os.path.exists(DB_NAME):
+            os.remove(DB_NAME)
+            print(f"[*] Cleanup complete: Temporary database '{DB_NAME}' deleted.")
 
 if __name__ == "__main__":
     main()
