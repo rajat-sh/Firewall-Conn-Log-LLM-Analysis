@@ -67,7 +67,7 @@ load_dotenv(override=True)
 
 # --- 2. SESSION STATE MANAGEMENT ---
 if "messages" not in st.session_state:
-    st.session_state["messages"] = [{"role": "assistant", "content": "Hello! Please upload an ASA log file in the sidebar, then ask me anything about the network traffic."}]
+    st.session_state["messages"] = [{"role": "assistant", "content": "Hello! Please upload an ASA log file in the sidebar. If you provide an API key, you can chat with me here!"}]
 
 if "db_path" not in st.session_state:
     st.session_state["db_path"] = None
@@ -83,7 +83,9 @@ with st.sidebar:
     st.header("Configuration")
     
     env_api_key = os.environ.get("OPENAI_API_KEY", "")
-    api_key = st.text_input("OpenAI API Key", value=env_api_key, type="password", help="Requires an OpenAI API Key (sk-...)")
+    
+    # Notice we label it as (Optional)
+    api_key = st.text_input("OpenAI API Key (Optional)", value=env_api_key, type="password", help="Leave blank if you only want the static reports without AI chat.")
     
     ignore_ssl = st.checkbox("Bypass SSL Verification", help="Check this if you are on a corporate network and receive Certificate errors.")
     
@@ -91,7 +93,8 @@ with st.sidebar:
     st.header("File Upload")
     uploaded_file = st.file_uploader("Upload ASA Log File (.txt or .log)", type=["txt", "log"])
 
-    if st.button("Process File") and uploaded_file and api_key:
+    # Notice we removed 'and api_key' from this condition so the button works without it!
+    if st.button("Process File") and uploaded_file:
         with st.spinner("Processing file... Please wait."):
             with tempfile.NamedTemporaryFile(delete=False, suffix=".log") as tmp_log:
                 tmp_log.write(uploaded_file.getvalue())
@@ -112,9 +115,7 @@ with st.sidebar:
                 cursor.execute("SELECT COUNT(*) FROM connections")
                 row_count = cursor.fetchone()[0]
                 
-                # --- GENERATE AND CAPTURE REPORTS ---
-                # We use StringIO to create a virtual file in memory, 
-                # then redirect standard output (print statements) into it.
+                # --- GENERATE STATIC REPORTS ---
                 f = io.StringIO()
                 with redirect_stdout(f):
                     print_top_bytes_entries(conn)
@@ -124,32 +125,35 @@ with st.sidebar:
                     print_ip_counts(conn, 50)
                     print_port_counts(conn, 50)
                 
-                # Save the giant text string into session state
                 st.session_state["initial_report"] = f.getvalue()
                 
-                # Setup LangChain Agent
-                http_client = httpx.Client(verify=False) if ignore_ssl else None
-                sql_db = SQLDatabase.from_uri(f"sqlite:///{tmp_db_path}")
-                
-                llm = ChatOpenAI(
-                    model=LLM_MODEL, 
-                    api_key=api_key, 
-                    temperature=0.0,
-                    http_client=http_client
-                )
-                
-                agent_executor = create_sql_agent(
-                    llm=llm,
-                    db=sql_db,
-                    agent_type="openai-tools",
-                    prefix=CUSTOM_ASA_PREFIX,
-                    verbose=False 
-                )
+                # --- CONDITIONALLY SETUP AGENT ---
+                if api_key:
+                    http_client = httpx.Client(verify=False) if ignore_ssl else None
+                    sql_db = SQLDatabase.from_uri(f"sqlite:///{tmp_db_path}")
+                    
+                    llm = ChatOpenAI(
+                        model=LLM_MODEL, 
+                        api_key=api_key, 
+                        temperature=0.0,
+                        http_client=http_client
+                    )
+                    
+                    agent_executor = create_sql_agent(
+                        llm=llm,
+                        db=sql_db,
+                        agent_type="openai-tools",
+                        prefix=CUSTOM_ASA_PREFIX,
+                        verbose=False 
+                    )
 
-                st.session_state["agent"] = agent_executor
-                st.session_state["db_path"] = tmp_db_path
-                
-                st.success(f"Successfully processed {row_count} records! (Format {format_type})")
+                    st.session_state["agent"] = agent_executor
+                    st.session_state["db_path"] = tmp_db_path
+                    st.success(f"Successfully processed {row_count} records! AI Chat is enabled.")
+                else:
+                    # If they didn't provide a key, clear any old agent and let them know
+                    st.session_state["agent"] = None
+                    st.success(f"Successfully processed {row_count} records! Generated Static Reports only (No API Key provided).")
             else:
                 st.error("Could not detect a valid ASA log format in this file.")
             
@@ -158,23 +162,21 @@ with st.sidebar:
 
 # --- 4. MAIN UI & CHAT INTERFACE ---
 
-# Display the captured CLI reports in a dropdown expander if they exist
 if st.session_state["initial_report"]:
     with st.expander("📊 View Initial Log Analysis Reports", expanded=False):
         st.code(st.session_state["initial_report"], language="text")
 
-# Display all previous chat messages
 for msg in st.session_state["messages"]:
     st.chat_message(msg["role"]).write(msg["content"])
 
-# Capture new user input
 if user_question := st.chat_input("Ask a question about your firewall logs..."):
     
     st.chat_message("user").write(user_question)
     st.session_state["messages"].append({"role": "user", "content": user_question})
     
     if st.session_state["agent"] is None:
-        error_msg = "Please upload and process a file in the sidebar before asking questions."
+        # Tell the user exactly why the chat isn't working
+        error_msg = "LLM Chat is disabled because no OpenAI API Key was provided. Please add your key in the sidebar and re-process the file to chat!"
         st.chat_message("assistant").write(error_msg)
         st.session_state["messages"].append({"role": "assistant", "content": error_msg})
     else:
