@@ -6,7 +6,7 @@ import httpx
 import io
 from contextlib import redirect_stdout
 from dotenv import load_dotenv
-
+import warnings
 # Hide LangChain Deprecation Warnings from the console
 warnings.filterwarnings("ignore", category=DeprecationWarning) # <-- Add this
 
