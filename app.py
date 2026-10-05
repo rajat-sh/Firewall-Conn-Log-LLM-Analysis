@@ -47,7 +47,8 @@ if uploaded_file and st.button("Analyze file"):
         with tempfile.NamedTemporaryFile(
             mode="wb", suffix=".log", delete=False
         ) as temp_file:
-            temp_file.write(uploaded_file.getvalue())
+            uploaded_file.seek(0)
+            shutil.copyfileobj(uploaded_file, temp_file, length=4096 * 4096)
             temp_path = temp_file.name
 
         # Close any database from an earlier analysis in this session.
